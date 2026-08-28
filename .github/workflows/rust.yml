@@ -1,0 +1,62 @@
+name: Rust
+
+# Единственный CI, гоняющий Rust в этом репозитории. Обёртка собирает все
+# слои из сабмодулей по path-зависимостям, поэтому чекаут строго с
+# submodules: recursive — без них Cargo.toml не находит torii/, satori/ и
+# остальные. Все репозитории публичные, так что хватает дефолтного
+# GITHUB_TOKEN (PAT, в отличие от слоёв, не нужен).
+on:
+  pull_request:
+    paths:
+      - "**/*.rs"
+      - Cargo.toml
+      - Cargo.lock
+      - .github/workflows/rust.yml
+      # апдейт сабмодуля — это изменение gitlink-пути, не .rs
+      - torii
+      - satori
+      - enma
+      - yatagarasu
+      - fujin
+      - daruma
+      - layer-kit
+  push:
+    branches: [main]
+    paths:
+      - "**/*.rs"
+      - Cargo.toml
+      - Cargo.lock
+      - .github/workflows/rust.yml
+      - torii
+      - satori
+      - enma
+      - yatagarasu
+      - fujin
+      - daruma
+      - layer-kit
+  workflow_dispatch:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Build
+        run: cargo build --workspace --all-targets
+
+      # --no-fail-fast обязателен: без него прогон обрывается на первом
+      # красном и выдаёт долю набора за полный.
+      - name: Test
+        run: cargo test --workspace --no-fail-fast
