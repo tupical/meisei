@@ -1,0 +1,33 @@
+[package]
+name = "meisei-pipeline"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+license = "Apache-2.0 WITH Commons-Clause"
+description = "Meisei umbrella: the minimal wrapper that ties the five maturity layers into one run down to Daruma"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "meisei"
+path = "src/bin/meisei.rs"
+
+[dependencies]
+# The five maturity layers, wired in pipeline order. This crate owns no
+# business logic — it only calls the adapters each layer already exposes,
+# threading one object's provenance into the next:
+#   RawItem (torii) → SensingItem (satori) → Decision (enma)
+#   → PlanBrief (yatagarasu) → ActionPacket (fujin) → NewPlan (daruma).
+torii       = { git = "https://github.com/tupical/torii" }
+satori      = { git = "https://github.com/tupical/satori" }
+enma        = { git = "https://github.com/tupical/enma" }
+yatagarasu  = { git = "https://github.com/tupical/yatagarasu" }
+fujin       = { git = "https://github.com/tupical/fujin" }
+
+# The terminal layer: only its core domain primitives, consumed read-only —
+# `NewPlan` (the §16 handoff target) plus `Actor`/ids.
+daruma-domain = { git = "https://github.com/tupical/daruma" }
+daruma-shared = { git = "https://github.com/tupical/daruma" }
+
+serde_json = "1.0"
