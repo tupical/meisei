@@ -60,7 +60,6 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 [[package]]
 name = "daruma-domain"
 version = "0.3.0"
-source = "git+https://github.com/tupical/daruma#d559bea3bb03a6fa8dc455e2928a415536e3273f"
 dependencies = [
  "chrono",
  "daruma-shared",
@@ -72,7 +71,6 @@ dependencies = [
 [[package]]
 name = "daruma-shared"
 version = "0.3.0"
-source = "git+https://github.com/tupical/daruma#d559bea3bb03a6fa8dc455e2928a415536e3273f"
 dependencies = [
  "chrono",
  "serde",
@@ -83,7 +81,6 @@ dependencies = [
 [[package]]
 name = "enma"
 version = "0.1.0"
-source = "git+https://github.com/tupical/enma#cd3e0eb1a8326bd5805692cc0d16a5c24b0a35b6"
 dependencies = [
  "chrono",
  "layer-kit",
@@ -107,7 +104,6 @@ checksum = "d45db016d36b838f563236e9193d0ee6ce38f3f68b6c94e914b4929c96bbb890"
 [[package]]
 name = "fujin"
 version = "0.1.0"
-source = "git+https://github.com/tupical/fujin#f105b8fec0fb61c06503a90959252afe878def97"
 dependencies = [
  "layer-kit",
  "serde",
@@ -210,7 +206,6 @@ dependencies = [
 [[package]]
 name = "layer-kit"
 version = "0.2.0"
-source = "git+https://github.com/tupical/layer-kit#ac58bb398c101121003734631bad6c6a75dc263e"
 dependencies = [
  "chrono",
  "serde",
@@ -304,7 +299,6 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 [[package]]
 name = "satori"
 version = "0.1.0"
-source = "git+https://github.com/tupical/satori#76e89d8e048a79a835546aa6990a28ecf87f70cb"
 dependencies = [
  "chrono",
  "layer-kit",
@@ -469,7 +463,6 @@ dependencies = [
 [[package]]
 name = "torii"
 version = "0.1.0"
-source = "git+https://github.com/tupical/torii#9247c922ffa537ea33d455ec7b5248271401aa4b"
 dependencies = [
  "chrono",
  "layer-kit",
@@ -615,7 +608,6 @@ dependencies = [
 [[package]]
 name = "yatagarasu"
 version = "0.1.0"
-source = "git+https://github.com/tupical/yatagarasu#d625e2c19ffde4897bce165b74c77de2b0412775"
 dependencies = [
  "chrono",
  "layer-kit",

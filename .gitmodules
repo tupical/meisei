@@ -1,0 +1,21 @@
+[submodule "layer-kit"]
+	path = layer-kit
+	url = https://github.com/tupical/layer-kit
+[submodule "torii"]
+	path = torii
+	url = https://github.com/tupical/torii
+[submodule "satori"]
+	path = satori
+	url = https://github.com/tupical/satori
+[submodule "enma"]
+	path = enma
+	url = https://github.com/tupical/enma
+[submodule "yatagarasu"]
+	path = yatagarasu
+	url = https://github.com/tupical/yatagarasu
+[submodule "fujin"]
+	path = fujin
+	url = https://github.com/tupical/fujin
+[submodule "daruma"]
+	path = daruma
+	url = https://github.com/tupical/daruma

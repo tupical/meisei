@@ -25,7 +25,9 @@ layers into a single run ending at Daruma, the execution layer.
 It owns **no business logic**. It only calls the adapters each layer already
 exposes and threads one object's output into the next — the same route a
 production host runs over HTTP hops against the deployed layer servers, done
-in-process with the layer crates as git dependencies.
+in-process. All six layers plus `layer-kit` are vendored as git submodules in
+the root, so the file tree above shows exactly what the pipeline is made of,
+and the whole run builds from this checkout alone.
 
 ## The maturity route
 
@@ -71,6 +73,8 @@ surface — that is how production hosts run the pipeline over HTTP hops.
 ## Quickstart
 
 ```sh
+git clone --recurse-submodules https://github.com/tupical/meisei
+cd meisei
 cargo run --quiet -- run "Read latency spiked after the cache eviction change"
 ```
 
@@ -107,8 +111,13 @@ cargo test          # lineage proof: NewPlan → … → RawItem, all real adapt
 
 ## Repository layout
 
+- `torii/` `satori/` `enma/` `yatagarasu/` `fujin/` `daruma/` `layer-kit/` —
+  the layers as git submodules, pinned to exact commits.
 - `src/` — the `meisei-pipeline` library and the `meisei` CLI.
 - `tests/` — the end-to-end lineage proof.
+
+Already cloned without `--recurse-submodules`? Run
+`git submodule update --init`.
 
 ## Docs
 

@@ -14,20 +14,22 @@ name = "meisei"
 path = "src/bin/meisei.rs"
 
 [dependencies]
-# The five maturity layers, wired in pipeline order. This crate owns no
-# business logic — it only calls the adapters each layer already exposes,
-# threading one object's provenance into the next:
+# The five maturity layers, wired in pipeline order. They are vendored as
+# git submodules in the canonical sibling layout, so the whole run builds
+# from this checkout alone. This crate owns no business logic — it only
+# calls the adapters each layer already exposes, threading one object's
+# provenance into the next:
 #   RawItem (torii) → SensingItem (satori) → Decision (enma)
 #   → PlanBrief (yatagarasu) → ActionPacket (fujin) → NewPlan (daruma).
-torii       = { git = "https://github.com/tupical/torii" }
-satori      = { git = "https://github.com/tupical/satori" }
-enma        = { git = "https://github.com/tupical/enma" }
-yatagarasu  = { git = "https://github.com/tupical/yatagarasu" }
-fujin       = { git = "https://github.com/tupical/fujin" }
+torii       = { path = "torii" }
+satori      = { path = "satori" }
+enma        = { path = "enma" }
+yatagarasu  = { path = "yatagarasu" }
+fujin       = { path = "fujin" }
 
 # The terminal layer: only its core domain primitives, consumed read-only —
 # `NewPlan` (the §16 handoff target) plus `Actor`/ids.
-daruma-domain = { git = "https://github.com/tupical/daruma" }
-daruma-shared = { git = "https://github.com/tupical/daruma" }
+daruma-domain = { path = "daruma/crates/domain" }
+daruma-shared = { path = "daruma/crates/shared" }
 
 serde_json = "1.0"
