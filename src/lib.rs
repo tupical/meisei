@@ -1,8 +1,8 @@
-//! Meisei 明晰 — the minimal wrapper that ties all five maturity layers
-//! into a single run.
+//! Meisei 明晰 — a deterministic lineage fixture, not a maturity run or
+//! evidence of maturity. It proves only cross-layer id connectivity.
 //!
 //! Every layer is its own crate with no dependency on its siblings; the
-//! adapters live here, in the host. [`run`] threads one object's output
+//! adapters live here, in the wrapper. [`run_lineage_fixture`] threads one object's output
 //! into the next, and each produced object carries the *id* of its source,
 //! so the whole chain can be walked backwards — from the final Daruma
 //! [`NewPlan`] to the originating [`RawItem`]:
@@ -15,22 +15,21 @@
 //!                      ──▶ NewPlan.source_brief        (actions → daruma)
 //! ```
 //!
-//! This crate writes **no new business logic**: it only orchestrates the
-//! adapters the layers already expose. Production hosts (e.g. MCPBox) run
-//! the same route over HTTP hops against the deployed layer servers; this
-//! is the in-process minimal path.
+//! Filled brief/packet fields are fixture placeholders, not planner decisions.
+//! A real host obtains these fields from the layers' AI operations and stops
+//! when they are unavailable; it must not fabricate missing fields.
 
 pub mod adapters;
 
+use daruma_domain::{Actor, NewPlan};
+use daruma_shared::time;
 use enma::Decision;
 use fujin::{into_new_plan, to_handoff, ActionPacket, Gate, HandoffProject, TaskCandidate};
 use satori::types::SensingItem;
-use daruma_domain::{Actor, NewPlan};
-use daruma_shared::time;
 use torii::raw_item::RawItem;
 use yatagarasu::PlanBrief;
 
-/// Everything the pipeline produced, kept together so the lineage can be
+/// Everything the lineage fixture produced, kept together so the lineage can be
 /// walked from the final [`NewPlan`] all the way back to the originating
 /// [`RawItem`]. The intermediate objects *are* the lineage: the back-links
 /// they carry are opaque ids, so recovering the source object requires
@@ -40,35 +39,37 @@ pub struct PipelineRun {
     pub raw: RawItem,
     /// Sensing item derived from `raw`.
     pub sensing: SensingItem,
-    /// The decision promoted from `sensing` (carries `sensing.id` in `links`).
+    /// The fixture decision from `sensing` (carries `sensing.id` in `links`).
     pub decision: Decision,
     /// The plan brief built from `decision` (carries `decision.id` in
     /// `decisions_made`).
     pub brief: PlanBrief,
-    /// The mature action packet (carries `decision.id` in `linked_decisions`).
+    /// The fixture action packet (carries `decision.id` in `linked_decisions`).
     pub packet: ActionPacket,
     /// The §16 handoff target lowered for Daruma (`source_brief` carries the
     /// packet's provenance links).
     pub plan: NewPlan,
 }
 
-/// A legitimate outcome of the maturity pipeline, not an orchestration bug.
+/// A refusal or validation failure in the lineage fixture.
 #[derive(Debug)]
 pub enum PipelineError {
-    /// The sensing item is not decision-worthy (`Question`, `Risk`, …) and
+    /// The sensing item is not decision-worthy (`Hypothesis`, `Question`, …) and
     /// so yields no `Decision`.
     NotDecisionWorthy,
     /// An artifact failed a maturity check on the way.
     Immature(String),
 }
 
-/// Run the full intake → … → Daruma pipeline on a single raw item.
+/// Build a deterministic lineage fixture from intake to a Daruma NewPlan.
 ///
 /// Threads each adapter's output into the next, preserving provenance at
 /// every hop. Returns the whole [`PipelineRun`] so the caller can verify
-/// lineage end to end. `actor` is recorded as the decider on the promoted
-/// decision.
-pub fn run(raw: RawItem, actor: Actor) -> Result<PipelineRun, PipelineError> {
+/// lineage end to end. This is not a maturity run or evidence of maturity:
+/// filled brief/packet fields are fixture placeholders, not planner decisions.
+/// Real hosts obtain them from layer AI operations and stop if unavailable,
+/// rather than fabricating them. `actor` is recorded on the fixture decision.
+pub fn run_lineage_fixture(raw: RawItem, actor: Actor) -> Result<PipelineRun, PipelineError> {
     // 1. intake → sensemaking
     let (sensing, _sensing_link) = adapters::sensing_from_raw(&raw);
 
@@ -80,67 +81,78 @@ pub fn run(raw: RawItem, actor: Actor) -> Result<PipelineRun, PipelineError> {
         .map_err(|e| PipelineError::Immature(format!("decision: {e:?}")))?;
 
     // 3. decisions → planning
-    let brief = enrich_brief(adapters::brief_from_decisions(std::slice::from_ref(&decision)));
+    let brief = fixture_brief(adapters::brief_from_decisions(std::slice::from_ref(
+        &decision,
+    )));
 
     // 4. planning → actions
-    let packet = mature(fujin::packet_from_brief(
+    let packet = fixture_packet(fujin::packet_from_brief(
         &serde_json::to_value(&brief).expect("PlanBrief serializes"),
     ));
 
-    // 5. actions → execution: the §13 maturity gate guards the crossing —
-    // `to_handoff` refuses an immature packet — then the packet's project
-    // lowers onto Daruma's intake contract.
+    // 5. Exercise the §13 gate and lower onto Daruma's intake contract.
+    // Passing with fixture placeholders proves connectivity, not maturity.
     let project = project_from_packet(&packet);
     to_handoff(&packet, vec![project.clone()])
         .map_err(|e| PipelineError::Immature(e.to_string()))?;
     let lowered = into_new_plan(&project, fujin::ProjectId::new(), fujin::Actor::user());
     let plan = adapters::lower_new_plan(lowered.plan);
 
-    Ok(PipelineRun { raw, sensing, decision, brief, packet, plan })
+    Ok(PipelineRun {
+        raw,
+        sensing,
+        decision,
+        brief,
+        packet,
+        plan,
+    })
 }
 
-/// Deterministic content for the §15 brief fields that `brief_from_decisions`
-/// leaves to the planner, preserving `decisions_made`. A real host asks the
-/// planning layer's AI operation (`yatagarasu.plan_ai`); without an AI
-/// provider the layer answers `503 ai_not_configured`, so the minimal
-/// in-process path fills them deterministically instead.
-fn enrich_brief(mut brief: PlanBrief) -> PlanBrief {
+/// Fill §15 fields with marked fixture placeholders, preserving `decisions_made`.
+/// These are not planner decisions or evidence of maturity. A real host obtains
+/// them from the planning layer's AI operation and stops if unavailable.
+fn fixture_brief(mut brief: PlanBrief) -> PlanBrief {
     if brief.goal.is_empty() {
-        brief.goal = "Ship the lineage-traceable pipeline".into();
+        brief.goal = "[fixture] Trace cross-layer ids".into();
     }
-    brief.in_scope = vec!["Wire the five OSS layers end to end".into()];
-    brief.completion_criteria = vec!["cargo test green; lineage roundtrips".into()];
-    brief.daruma_target = "meisei pipeline plan".into();
-    brief.why_now = Some("Prove Meisei object lineage end to end".into());
-    brief.risks = vec!["Provenance lost at a layer boundary".into()];
-    brief.constraints = vec!["No new business logic in the orchestrator".into()];
-    brief.knowledge_base = vec!["Meisei maturity pipeline canon".into()];
-    brief.rejected_alternatives = vec!["Mocking the chain instead of running it".into()];
-    brief.out_of_scope = vec!["Persisting to a real Daruma store".into()];
-    brief.dependencies = vec!["intake/sensemaking/decisions/planning/actions OSS".into()];
-    brief.required_artifacts = vec!["lineage test".into()];
+    brief.in_scope = vec!["[fixture] Wire the five OSS layers end to end".into()];
+    brief.completion_criteria = vec!["[fixture] cargo test green; lineage roundtrips".into()];
+    brief.daruma_target = "[fixture] meisei lineage plan".into();
+    brief.why_now = Some("[fixture] Prove Meisei object lineage end to end".into());
+    brief.risks = vec!["[fixture] Provenance lost at a layer boundary".into()];
+    brief.constraints = vec!["[fixture] No new business logic in the wrapper".into()];
+    brief.knowledge_base = vec!["[fixture] Meisei maturity pipeline canon".into()];
+    brief.rejected_alternatives = vec!["[fixture] Mocking the chain instead of running it".into()];
+    brief.out_of_scope = vec!["[fixture] Persisting to a real Daruma store".into()];
+    brief.dependencies = vec!["[fixture] intake/sensemaking/decisions/planning/actions OSS".into()];
+    brief.required_artifacts = vec!["[fixture] lineage test".into()];
     brief
 }
 
-/// Deterministic content for the three execution-only §13 fields
+/// Marked fixture placeholders for the three execution-only §13 fields
 /// (`expected_artifacts`, `before_start`, `before_complete`), which have no
-/// §15 source — same reasoning as [`enrich_brief`].
-fn mature(mut packet: ActionPacket) -> ActionPacket {
-    packet.expected_artifacts = vec!["NewPlan lowered for Daruma".into()];
-    packet.before_start = vec![Gate { rule: "brief is ready".into() }];
-    packet.before_complete = vec![Gate { rule: "cargo test green".into() }];
+/// §15 source. Like [`fixture_brief`], these are not planner decisions or
+/// evidence of maturity; a real host stops without the layer's AI output.
+fn fixture_packet(mut packet: ActionPacket) -> ActionPacket {
+    packet.expected_artifacts = vec!["[fixture] NewPlan lowered for Daruma".into()];
+    packet.before_start = vec![Gate {
+        rule: "[fixture] brief is ready".into(),
+    }];
+    packet.before_complete = vec![Gate {
+        rule: "[fixture] cargo test green".into(),
+    }];
     packet
 }
 
-/// Shape one Daruma project from a packet (title/goal/criteria/tasks).
+/// Shape one fixture Daruma project from a packet (title/goal/criteria/tasks).
 fn project_from_packet(packet: &ActionPacket) -> HandoffProject {
     HandoffProject {
-        project_title: "Meisei pipeline".into(),
+        project_title: "[fixture] Meisei lineage".into(),
         plan_title: packet.goal.clone(),
         goal: packet.goal.clone(),
         success_criteria: packet.completion_criteria.clone(),
         tasks: vec![TaskCandidate {
-            title: "Run the lineage test".into(),
+            title: "[fixture] Run the lineage test".into(),
             description: packet.why.clone(),
         }],
         // §13 provenance rides along: dropping it here would sever lineage at

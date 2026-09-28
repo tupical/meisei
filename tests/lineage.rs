@@ -1,18 +1,16 @@
-//! Run the whole Meisei maturity pipeline for real and prove the object
-//! lineage can be walked backwards from the Daruma `NewPlan` all the way to
-//! the originating `RawItem`. Nothing here is mocked — every hop goes
-//! through the layer's own adapter.
+//! Prove cross-layer id connectivity from the fixture Daruma `NewPlan` to
+//! the originating `RawItem`. Placeholder fields are not maturity evidence.
 
 use daruma_domain::Actor;
 use enma::Link;
-use meisei_pipeline::{run, PipelineRun};
-use satori::types::SensingTarget;
+use meisei_pipeline::{run_lineage_fixture, PipelineError, PipelineRun};
+use satori::types::{SensingItemKind, SensingTarget};
 use torii::raw_item::{NewRawItem, RawItemKind};
 
 #[test]
 fn lineage_traces_newplan_back_to_raw_item() {
     // An `Event` raw item maps to a `SensingItem::Insight`, a sensing kind
-    // that promotes to a *Decision* — the spine of the lineage we trace.
+    // eligible for a fixture Decision — the spine of the lineage we trace.
     let raw = NewRawItem::new(
         "webhook://gh/push",
         RawItemKind::Event,
@@ -21,10 +19,38 @@ fn lineage_traces_newplan_back_to_raw_item() {
     .build();
     let raw_id = raw.id.to_string();
 
-    let PipelineRun { raw, sensing, decision, brief, packet, plan } =
-        run(raw, Actor::user()).expect("the Event/Insight item must mature into a plan");
+    let PipelineRun {
+        raw,
+        sensing,
+        decision,
+        brief,
+        packet,
+        plan,
+    } = run_lineage_fixture(raw, Actor::user())
+        .expect("Event/Insight must produce a lineage fixture");
 
-    assert!(!plan.title.is_empty(), "pipeline must lower a real NewPlan");
+    assert_eq!(sensing.kind, SensingItemKind::Insight);
+    for field in [&brief.goal, &brief.daruma_target, &packet.goal, &plan.title]
+        .into_iter()
+        .chain(&brief.why_now)
+        .chain(&brief.in_scope)
+        .chain(&brief.completion_criteria)
+        .chain(&brief.risks)
+        .chain(&brief.constraints)
+        .chain(&brief.knowledge_base)
+        .chain(&brief.rejected_alternatives)
+        .chain(&brief.out_of_scope)
+        .chain(&brief.dependencies)
+        .chain(&brief.required_artifacts)
+        .chain(&packet.expected_artifacts)
+        .chain(packet.before_start.iter().map(|gate| &gate.rule))
+        .chain(packet.before_complete.iter().map(|gate| &gate.rule))
+    {
+        assert!(
+            field.starts_with("[fixture] "),
+            "unmarked placeholder: {field}"
+        );
+    }
     assert_eq!(raw.id.to_string(), raw_id, "the seed RawItem is preserved");
 
     // Hop 1 — NewPlan / ActionPacket → Decision.
@@ -71,6 +97,43 @@ fn lineage_traces_newplan_back_to_raw_item() {
 }
 
 #[test]
+fn text_hypothesis_cannot_produce_decision_or_downstream_artifacts() {
+    let raw = NewRawItem::new("cli://test", RawItemKind::Text, "maybe cache is slow").build();
+    let (sensing, _) = meisei_pipeline::adapters::sensing_from_raw(&raw);
+    assert_eq!(sensing.kind, SensingItemKind::Hypothesis);
+    assert!(meisei_pipeline::adapters::decision_from_sensing(&sensing, &Actor::user()).is_none());
+    // Refusal returns no PipelineRun, hence no Decision/PlanBrief/ActionPacket/NewPlan.
+    assert!(matches!(
+        run_lineage_fixture(raw, Actor::user()),
+        Err(PipelineError::NotDecisionWorthy)
+    ));
+}
+
+#[test]
+fn cli_labels_fixture_and_refuses_text_hypothesis() {
+    let success = std::process::Command::new(env!("CARGO_BIN_EXE_meisei"))
+        .args(["fixture", "Read latency spiked"])
+        .output()
+        .unwrap();
+    assert!(success.status.success());
+    let stdout = String::from_utf8(success.stdout).unwrap();
+    assert_eq!(stdout.lines().next(), Some("meisei — deterministic lineage fixture (not a maturity run: brief/packet fields are fixture placeholders)"));
+    assert!(stdout.contains("[fixture] "));
+
+    let refusal = std::process::Command::new(env!("CARGO_BIN_EXE_meisei"))
+        .args(["fixture", "--text", "maybe cache is slow"])
+        .output()
+        .unwrap();
+    assert_eq!(refusal.status.code(), Some(1));
+    let stderr = String::from_utf8(refusal.stderr).unwrap();
+    assert!(stderr.contains("ADR-0011"));
+    assert!(stderr.contains("input is not decision-worthy"));
+    assert!(!String::from_utf8(refusal.stdout)
+        .unwrap()
+        .contains("  3 decisions"));
+}
+
+#[test]
 fn non_decision_worthy_input_stops_at_sensemaking() {
     // A `Document` maps to `Knowledge`, which is not decision-worthy: the
     // pipeline stops cleanly instead of forcing a decision out of it.
@@ -81,7 +144,7 @@ fn non_decision_worthy_input_stops_at_sensemaking() {
     )
     .build();
 
-    match run(raw, Actor::user()) {
+    match run_lineage_fixture(raw, Actor::user()) {
         Err(meisei_pipeline::PipelineError::NotDecisionWorthy) => {}
         Err(e) => panic!("expected NotDecisionWorthy, got {e:?}"),
         Ok(_) => panic!("knowledge must not promote to a decision"),

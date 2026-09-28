@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.80"
 license = "Apache-2.0 WITH Commons-Clause"
-description = "Meisei umbrella: the minimal wrapper that ties the five maturity layers into one run down to Daruma"
+description = "Meisei umbrella: deterministic lineage fixture connecting layer ids down to a Daruma NewPlan"
 
 [lib]
 path = "src/lib.rs"

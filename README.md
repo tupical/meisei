@@ -1,7 +1,7 @@
-# Meisei 明晰 — all layers, one run
+# Meisei 明晰 — deterministic lineage fixture
 
-> **Meisei** 明晰 (“clarity”) is an open pipeline that carries raw intent through
-> understanding → decision → plan → action to a finished result.
+> This wrapper demonstrates how ids connect Meisei layer objects. It does not
+> demonstrate how decisions are made and is not a maturity run or proof of maturity.
 
 [![License: Apache-2.0 WITH Commons-Clause](https://img.shields.io/badge/license-Apache--2.0%20WITH%20Commons--Clause-blue.svg)](LICENSE)
 
@@ -17,19 +17,20 @@
 
 ## What this repo is
 
-The six Meisei layers each live in their own repository and none depends on a
-sibling — so nothing *shows* they belong together. This repo is the missing
-umbrella: a **minimal wrapper** (`meisei-pipeline`) that ties all five maturity
-layers into a single run ending at Daruma, the execution layer.
+`meisei-pipeline` is a **deterministic lineage fixture/demo** connecting the
+Meisei layers in-process, down to a Daruma `NewPlan`. It proves cross-layer id
+connectivity, not production semantics. The layers and `layer-kit` are pinned
+as git submodules so the fixture builds from this checkout.
 
-It owns **no business logic**. It only calls the adapters each layer already
-exposes and threads one object's output into the next — the same route a
-production host runs over HTTP hops against the deployed layer servers, done
-in-process. All six layers plus `layer-kit` are vendored as git submodules in
-the root, so the file tree above shows exactly what the pipeline is made of,
-and the whole run builds from this checkout alone.
+**Hypothesis/text does not become a Decision** ([ADR-0011](https://github.com/tupical/meisei.ru/blob/main/adr/0011-hypothesis-not-decision-worthy.md)).
+A real transition to a decision is a semantically justified enma operation,
+not an automatic step. The fixture accepts only `Insight` for its lineage demo.
 
-## The maturity route
+Filled `PlanBrief`/`ActionPacket` fields are marked `[fixture]` placeholders,
+not planner decisions. A real host obtains them from the layers' AI operations;
+without that output it stops, rather than synthesizing missing fields.
+
+## The fixture's object chain
 
 ```text
   RawItem (torii / intake)
@@ -51,8 +52,8 @@ walked backwards — from the final `NewPlan` to the originating `RawItem`:
                      ──▶ NewPlan.source_brief        (actions → daruma)
 ```
 
-`tests/lineage.rs` runs the whole pipeline through the real adapters and
-asserts this walk succeeds.
+`tests/lineage.rs` checks this id roundtrip, fixture labels, and refusal of text
+hypotheses. It does not verify semantic maturity.
 
 ## The layers
 
@@ -75,46 +76,55 @@ surface — that is how production hosts run the pipeline over HTTP hops.
 ```sh
 git clone --recurse-submodules https://github.com/tupical/meisei
 cd meisei
-cargo run --quiet -- run "Read latency spiked after the cache eviction change"
+cargo run --quiet -- fixture "Read latency spiked"
 ```
 
 ```text
-meisei — one run through the maturity pipeline
+meisei — deterministic lineage fixture (not a maturity run: brief/packet fields are fixture placeholders)
 
-  1 intake       ri_…  "Read latency spiked after the cache eviction change"
+  1 intake       ri_…  "Read latency spiked"
   2 sensemaking  si_…  Insight <- raw ri_…
-  3 decisions    de_…  <- sensing si_…
-  4 planning     brief "Ship the lineage-traceable pipeline" <- decision de_…
-  5 actions      packet "…" mature <- decision de_…
-  6 execution    plan "…" -> daruma NewPlan
+  3 decisions    dec_…  <- sensing si_…
+  4 planning     brief "[fixture] Trace cross-layer ids" <- decision dec_…
+  5 actions      packet "[fixture] Trace cross-layer ids" <- decision dec_…
+  6 execution    plan "[fixture] Trace cross-layer ids" -> daruma NewPlan
 
-lineage: plan.source_brief carries de_…
+lineage: plan.source_brief carries dec_…
 ```
 
 ```sh
-cargo test          # lineage proof: NewPlan → … → RawItem, all real adapters
+# Default input kind is Event → Insight. Text → Hypothesis is refused:
+cargo run --quiet -- fixture --text "maybe cache is slow"
+# exits 1
+```
+
+```text
+meisei — deterministic lineage fixture (not a maturity run: brief/packet fields are fixture placeholders)
+
+fixture stopped: ADR-0011 — input is not decision-worthy. No Decision, PlanBrief, ActionPacket or NewPlan was created.
+```
+
+```sh
+cargo test          # lineage roundtrip, fixture labels, and refusal regression
 ```
 
 ## How the wrapper works
 
-- `src/adapters.rs` — the only place sibling types meet: pure translations
-  between layer types, one per hop.
-- `src/lib.rs` — `run(raw, actor)` threads the hops; fujin's §13 maturity
-  gate (`to_handoff`) guards the crossing into Daruma: an immature packet is
-  refused, never forced.
-- Inputs that are not decision-worthy (a reference document, a question) stop
-  cleanly at sensemaking — a legitimate pipeline outcome, not an error.
-- Without an AI provider key the layers' AI operations answer
-  `503 ai_not_configured`; the deterministic path here fills the
-  planner-owned brief/packet fields itself (`enrich_brief`/`mature`) so the
-  run is reproducible offline.
+- `src/adapters.rs` translates sibling types for the fixture. Only `Insight`
+  is eligible; `Hypothesis` and all other kinds yield `NotDecisionWorthy`.
+- `src/lib.rs` — `run_lineage_fixture(raw, actor)` threads ids through the
+  adapters and fujin's `to_handoff` check into an in-memory Daruma `NewPlan`.
+- `fixture_brief`/`fixture_packet` supply marked placeholders solely to
+  exercise that wiring offline. Passing checks with these placeholders is
+  not evidence of maturity, and they are never a fallback for missing AI output
+  in a real host. Nothing is persisted to Daruma.
 
 ## Repository layout
 
 - `torii/` `satori/` `enma/` `yatagarasu/` `fujin/` `daruma/` `layer-kit/` —
   the layers as git submodules, pinned to exact commits.
 - `src/` — the `meisei-pipeline` library and the `meisei` CLI.
-- `tests/` — the end-to-end lineage proof.
+- `tests/` — lineage fixture tests.
 
 Already cloned without `--recurse-submodules`? Run
 `git submodule update --init`.

@@ -1,25 +1,36 @@
-//! CLI: run one raw idea through the whole maturity pipeline and print the
-//! lineage chain.
+//! CLI: demonstrate cross-layer ids with deterministic fixture placeholders.
+//! This is not a maturity run or evidence of maturity.
 
 use daruma_domain::Actor;
 use enma::Link;
+use meisei_pipeline::PipelineError;
 use torii::raw_item::{NewRawItem, RawItemKind};
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let text = match args.as_slice() {
-        [cmd, text] if cmd == "run" && !text.is_empty() => text.clone(),
+    let (text, kind) = match args.as_slice() {
+        [cmd, text] if cmd == "fixture" && !text.is_empty() && text != "--text" => {
+            (text.clone(), RawItemKind::Event)
+        }
+        [cmd, flag, text] if cmd == "fixture" && flag == "--text" && !text.is_empty() => {
+            (text.clone(), RawItemKind::Text)
+        }
         _ => {
-            eprintln!("usage: meisei run \"<raw text>\"");
+            eprintln!("usage: meisei fixture [--text] \"<raw text>\"");
             std::process::exit(2);
         }
     };
 
-    let raw = NewRawItem::new("cli://meisei", RawItemKind::Event, text).build();
-    let run = match meisei_pipeline::run(raw, Actor::user()) {
+    println!("meisei — deterministic lineage fixture (not a maturity run: brief/packet fields are fixture placeholders)\n");
+    let raw = NewRawItem::new("cli://meisei", kind, text).build();
+    let run = match meisei_pipeline::run_lineage_fixture(raw, Actor::user()) {
         Ok(run) => run,
+        Err(PipelineError::NotDecisionWorthy) => {
+            eprintln!("fixture stopped: ADR-0011 — input is not decision-worthy. No Decision, PlanBrief, ActionPacket or NewPlan was created.");
+            std::process::exit(1);
+        }
         Err(e) => {
-            eprintln!("pipeline stopped: {e:?}");
+            eprintln!("fixture stopped: {e:?}");
             std::process::exit(1);
         }
     };
@@ -40,14 +51,37 @@ fn main() {
         .map(|l| l.id.as_str())
         .collect();
 
-    println!("meisei — one run through the maturity pipeline\n");
-    println!("  1 intake       {}  \"{}\"", run.raw.id, clip(&run.raw.body));
-    println!("  2 sensemaking  {}  {:?} <- raw {}", run.sensing.id, run.sensing.kind, run.raw.id);
-    println!("  3 decisions    {}  <- sensing {}", run.decision.id, sensing_ref);
-    println!("  4 planning     brief \"{}\" <- decision {}", clip(&run.brief.goal), run.decision.id);
-    println!("  5 actions      packet \"{}\" mature <- decision {}", clip(&run.packet.goal), decision_refs.join(", "));
-    println!("  6 execution    plan \"{}\" -> daruma NewPlan", clip(&run.plan.title));
-    println!("\nlineage: plan.source_brief carries {}", decision_refs.join(", "));
+    println!(
+        "  1 intake       {}  \"{}\"",
+        run.raw.id,
+        clip(&run.raw.body)
+    );
+    println!(
+        "  2 sensemaking  {}  {:?} <- raw {}",
+        run.sensing.id, run.sensing.kind, run.raw.id
+    );
+    println!(
+        "  3 decisions    {}  <- sensing {}",
+        run.decision.id, sensing_ref
+    );
+    println!(
+        "  4 planning     brief \"{}\" <- decision {}",
+        clip(&run.brief.goal),
+        run.decision.id
+    );
+    println!(
+        "  5 actions      packet \"{}\" <- decision {}",
+        clip(&run.packet.goal),
+        decision_refs.join(", ")
+    );
+    println!(
+        "  6 execution    plan \"{}\" -> daruma NewPlan",
+        clip(&run.plan.title)
+    );
+    println!(
+        "\nlineage: plan.source_brief carries {}",
+        decision_refs.join(", ")
+    );
 }
 
 fn clip(s: &str) -> String {
