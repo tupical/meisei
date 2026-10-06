@@ -63,7 +63,7 @@ fn tools() -> Vec<serde_json::Value> {
                 "type": "object",
                 "properties": {
                     "source": {"type": "string"},
-                    "kind": {"type": "string", "description": "Media type: text, document, reference, binary, or event. Semantic/free-form values are treated as text."},
+                    "kind": {"type": "string", "description": "Media type: text, document, reference, binary, or event. Aliases idea, note, implementation_plan, security_plan are normalized to text (reported as kind_normalized_from); any other value is rejected with invalid_params."},
                     "body": {"type": "string"},
                     "link": {"type": "string"}
                 },
@@ -124,7 +124,7 @@ async fn main() {
 #[derive(serde::Deserialize)]
 struct IngestParams {
     source: String,
-    kind: RawItemKind,
+    kind: String,
     body: String,
     #[serde(default)]
     link: Option<String>,
@@ -204,7 +204,20 @@ async fn dispatch<P: torii::AiProvider>(
                     json!({"error": "invalid_params", "detail": e.to_string()}),
                 )
             })?;
-            let mut draft = NewRawItem::new(p.source, p.kind, p.body);
+            let Some((kind, aliased)) = RawItemKind::from_input(&p.kind) else {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    json!({
+                        "error": "invalid_params",
+                        "detail": format!(
+                            "unknown kind `{}`: expected text, document, reference, binary, event \
+                             (aliases idea, note, implementation_plan, security_plan map to text)",
+                            p.kind
+                        )
+                    }),
+                ));
+            };
+            let mut draft = NewRawItem::new(p.source, kind, p.body);
             if let Some(target) = p.link {
                 draft = draft.with_link(target);
             }
@@ -213,7 +226,11 @@ async fn dispatch<P: torii::AiProvider>(
                 .put("raw_item", &item.id.to_string(), &item)
                 .await
                 .map_err(storage_error)?;
-            Ok(json!({ "method": "torii.ingest_raw", "raw_item": item }))
+            let mut out = json!({ "method": "torii.ingest_raw", "raw_item": item });
+            if aliased {
+                out["kind_normalized_from"] = json!(p.kind);
+            }
+            Ok(out)
         }
         "torii.parse" => {
             let p: ParseParams = serde_json::from_value(params).map_err(|e| {
@@ -321,6 +338,38 @@ mod tests {
             item["id"].as_str().is_some(),
             "RawItem must carry an id (provenance seed)"
         );
+    }
+
+    #[tokio::test]
+    async fn ingest_raw_normalizes_alias_and_rejects_unknown_kind() {
+        let out = dispatch(
+            None::<&OpenAiProvider>,
+            "torii.ingest_raw",
+            json!({"source": "user://a", "kind": "idea", "body": "x"}),
+        )
+        .await
+        .expect("alias must succeed");
+        assert_eq!(out["raw_item"]["kind"], "text");
+        assert_eq!(out["kind_normalized_from"], "idea");
+
+        let out = dispatch(
+            None::<&OpenAiProvider>,
+            "torii.ingest_raw",
+            json!({"source": "user://a", "kind": "text", "body": "x"}),
+        )
+        .await
+        .unwrap();
+        assert!(out.get("kind_normalized_from").is_none());
+
+        let (code, body) = dispatch(
+            None::<&OpenAiProvider>,
+            "torii.ingest_raw",
+            json!({"source": "user://a", "kind": "zzz", "body": "x"}),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(code, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"], "invalid_params");
     }
 
     #[tokio::test]

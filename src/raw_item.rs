@@ -53,17 +53,32 @@ pub enum RawItemKind {
 // keep arms in sync with RawItemKind variants
 impl<'de> Deserialize<'de> for RawItemKind {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Ok(match String::deserialize(deserializer)?.as_str() {
-            "document" => Self::Document,
-            "reference" => Self::Reference,
-            "binary" => Self::Binary,
-            "event" => Self::Event,
-            _ => Self::Text,
+        let s = String::deserialize(deserializer)?;
+        Self::from_input(&s).map(|(k, _)| k).ok_or_else(|| {
+            serde::de::Error::custom(format!(
+                "unknown kind `{s}`: expected text, document, reference, binary, event \
+                 (aliases idea, note, implementation_plan, security_plan map to text)"
+            ))
         })
     }
 }
 
 impl RawItemKind {
+    /// Разбор входного `kind`. Второй элемент — `true`, если значение было алиасом
+    /// (семантический вид → `Text`), чтобы вызывающий сообщил о нормализации.
+    /// Неизвестное значение → `None` (раньше молча превращалось в `Text`).
+    pub fn from_input(s: &str) -> Option<(Self, bool)> {
+        Some(match s {
+            "text" => (Self::Text, false),
+            "document" => (Self::Document, false),
+            "reference" => (Self::Reference, false),
+            "binary" => (Self::Binary, false),
+            "event" => (Self::Event, false),
+            "idea" | "note" | "implementation_plan" | "security_plan" => (Self::Text, true),
+            _ => return None,
+        })
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             RawItemKind::Text => "text",
@@ -229,13 +244,27 @@ mod tests {
     }
 
     #[test]
-    fn raw_item_kind_maps_semantic_kinds_to_text() {
-        for kind in ["idea", "security_plan", "implementation_plan"] {
+    fn raw_item_kind_maps_semantic_aliases_to_text() {
+        for kind in ["idea", "note", "security_plan", "implementation_plan"] {
             assert_eq!(
                 serde_json::from_str::<RawItemKind>(&format!("\"{kind}\"")).unwrap(),
                 RawItemKind::Text
             );
+            assert_eq!(
+                RawItemKind::from_input(kind),
+                Some((RawItemKind::Text, true))
+            );
         }
+        assert_eq!(
+            RawItemKind::from_input("text"),
+            Some((RawItemKind::Text, false))
+        );
+    }
+
+    #[test]
+    fn raw_item_kind_rejects_unknown() {
+        assert!(RawItemKind::from_input("zzz").is_none());
+        assert!(serde_json::from_str::<RawItemKind>("\"zzz\"").is_err());
     }
 
     #[test]
