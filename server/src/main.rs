@@ -462,6 +462,67 @@ mod tests {
         assert_eq!(code, StatusCode::BAD_REQUEST);
     }
 
+    /// L-12 over the real provider: OpenAiProvider talks HTTP to a stub
+    /// Responses endpoint that reports usage; torii.parse must surface the
+    /// configured model and that usage in `_meta`, exactly like satori.sense.
+    #[tokio::test]
+    async fn parse_with_openai_provider_reports_model_and_usage() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 65536];
+                    let _ = socket.read(&mut buf).await;
+                    let body = json!({
+                        "output": [{
+                            "type": "function_call",
+                            "name": "create_task",
+                            "arguments": r#"{"title":"Buy milk","priority":"p2"}"#
+                        }],
+                        "usage": {"input_tokens": 51, "output_tokens": 9, "total_tokens": 60}
+                    })
+                    .to_string();
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = socket.write_all(resp.as_bytes()).await;
+                });
+            }
+        });
+        let cfg = AiConfig {
+            api_key: "sk-test".into(),
+            base_url: format!("http://{addr}/v1"),
+            model: "stub-model".into(),
+            max_output_tokens: None,
+            api_protocol: Default::default(),
+            request_timeout_seconds: Some(5),
+        };
+        // no_proxy(): the dev host's HTTP_PROXY would answer for loopback.
+        let http = OpenAiProvider::http_client_builder()
+            .no_proxy()
+            .build()
+            .unwrap();
+        let provider = OpenAiProvider::with_http_client(cfg, http);
+
+        let out = super::dispatch(
+            &test_store().await,
+            Some((&provider, provider.model())),
+            "torii.parse",
+            json!({"input": "buy milk tomorrow"}),
+        )
+        .await
+        .expect("parse over a stub provider must succeed");
+
+        assert_eq!(out["task_draft"]["title"], "Buy milk");
+        assert_eq!(out["_meta"]["model"], "stub-model");
+        assert_eq!(out["_meta"]["usage"]["input_tokens"], 51);
+        assert_eq!(out["_meta"]["usage"]["output_tokens"], 9);
+        assert_eq!(out["_meta"]["usage"]["total_tokens"], 60);
+    }
+
     #[tokio::test]
     async fn parse_maps_tool_call_to_task_draft() {
         let fake = FakeParse {
