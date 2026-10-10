@@ -12,7 +12,7 @@
 
 use serde::Serialize;
 
-use crate::ai::{AiOutput, AiProvider, AiRequest};
+use crate::ai::{AiOutput, AiProvider, AiRequest, AiUsage};
 use crate::error::SensemakingError;
 use crate::prompts::PromptRegistry;
 use crate::types::{Confidence, SensingItem, SensingItemKind, Source};
@@ -179,13 +179,13 @@ fn classify_line(line: &str) -> (SensingItemKind, &str) {
 // ── Operation ────────────────────────────────────────────────────────────
 
 /// Run a research query through the provider and return the answer as
-/// a plain string. The caller is responsible for any side-effect (e.g.
+/// a plain string plus the provider's token usage, when it reports one. The caller is responsible for any side-effect (e.g.
 /// saving the answer as a `Research` comment on a task).
 pub async fn research<P: AiProvider>(
     provider: &P,
     query: &str,
     context: &[TaskContext],
-) -> Result<String, SensemakingError> {
+) -> Result<(String, Option<AiUsage>), SensemakingError> {
     if query.trim().is_empty() {
         return Err(SensemakingError::validation("research: query is empty"));
     }
@@ -195,11 +195,11 @@ pub async fn research<P: AiProvider>(
         tools: vec![],
         tool_choice: None,
     };
-    let outputs = provider.respond(req).await?;
+    let (outputs, usage) = provider.respond_with_usage(req).await?;
     // Extract the first text output; fall back to validation error if none.
     for output in outputs {
         if let AiOutput::Text(text) = output {
-            return Ok(text);
+            return Ok((text, usage));
         }
     }
     Err(SensemakingError::validation(
@@ -293,8 +293,9 @@ mod tests {
     async fn provider_receives_assembled_prompt_and_returns_text() {
         let provider = FakeProvider::new("answer body");
         let tasks = vec![sample_task("ctx", "")];
-        let out = research(&provider, "explain", &tasks).await.unwrap();
+        let (out, usage) = research(&provider, "explain", &tasks).await.unwrap();
         assert_eq!(out, "answer body");
+        assert_eq!(usage, None, "a provider without usage reports none");
     }
 
     #[test]

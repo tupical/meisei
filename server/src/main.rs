@@ -216,6 +216,16 @@ fn needs_input(questions: Vec<String>) -> (StatusCode, serde_json::Value) {
     )
 }
 
+/// `_meta` of an AI method's answer: the model always, usage when the
+/// provider reported it. Response-only — never persisted with the item.
+fn ai_meta(model: &str, usage: Option<satori::AiUsage>) -> serde_json::Value {
+    let mut meta = json!({"model": model});
+    if let Some(usage) = usage {
+        meta["usage"] = json!(usage);
+    }
+    meta
+}
+
 const METHODS: &[&str] = &["satori.sense", "satori.recall", "satori.research"];
 
 async fn dispatch_with_ai<P: satori::AiProvider>(
@@ -282,11 +292,7 @@ async fn dispatch_with_ai<P: satori::AiProvider>(
                 .await
                 .map_err(storage_error)?;
             let mut out = json!({ "method": "satori.sense", "sensing_item": item });
-            let mut meta = json!({"model": model});
-            if let Some(usage) = usage {
-                meta["usage"] = json!(usage);
-            }
-            out["_meta"] = meta;
+            out["_meta"] = ai_meta(model, usage);
             Ok(out)
         }
         "satori.research" => {
@@ -296,14 +302,14 @@ async fn dispatch_with_ai<P: satori::AiProvider>(
                     json!({"error": "invalid_params", "detail": e.to_string()}),
                 )
             })?;
-            let (provider, _) = ai.ok_or_else(ai_not_configured)?;
+            let (provider, model) = ai.ok_or_else(ai_not_configured)?;
             let context: Vec<satori::TaskContext> = p
                 .context
                 .into_iter()
                 .map(|t| satori::TaskContext::new(t.id, t.title, t.description))
                 .collect();
             // Real AI operation: query (+ optional task grounding) → answer.
-            let answer = satori::research(provider, &p.query, &context)
+            let (answer, usage) = satori::research(provider, &p.query, &context)
                 .await
                 .map_err(ai_error)?;
             let items = satori::annotate_research_output(&answer, Some(p.query.clone()));
@@ -313,7 +319,10 @@ async fn dispatch_with_ai<P: satori::AiProvider>(
                     .await
                     .map_err(storage_error)?;
             }
-            Ok(json!({ "method": "satori.research", "answer": answer, "sensing_items": items }))
+            let mut out =
+                json!({ "method": "satori.research", "answer": answer, "sensing_items": items });
+            out["_meta"] = ai_meta(model, usage);
+            Ok(out)
         }
         "satori.recall" => {
             let p: RecallParams = serde_json::from_value(params).map_err(|e| {
@@ -397,6 +406,20 @@ mod tests {
     impl satori::AiProvider for FakeResearch {
         async fn respond(&self, _req: AiRequest) -> Result<Vec<AiOutput>, AiError> {
             Ok(vec![AiOutput::Text(self.text.clone())])
+        }
+
+        async fn respond_with_usage(
+            &self,
+            req: AiRequest,
+        ) -> Result<(Vec<AiOutput>, Option<AiUsage>), AiError> {
+            Ok((
+                self.respond(req).await?,
+                Some(AiUsage {
+                    input_tokens: Some(40),
+                    output_tokens: Some(2),
+                    total_tokens: Some(42),
+                }),
+            ))
         }
     }
 
@@ -621,6 +644,9 @@ mod tests {
         .expect("research must succeed");
         assert_eq!(out["method"], "satori.research");
         assert_eq!(out["answer"], "rotate tokens every 24h");
+        // L-12: research reports model and token usage like sense does.
+        assert_eq!(out["_meta"]["model"], "test");
+        assert_eq!(out["_meta"]["usage"]["total_tokens"], 42);
     }
 
     #[tokio::test]
