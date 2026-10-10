@@ -44,7 +44,11 @@ impl McpHandler for Handler {
         let store = &self
             .store
             .scoped(&claims.workspace, claims.project.as_deref());
-        dispatch(store, self.ai.as_ref(), method, params).await
+        let ai = self
+            .ai
+            .as_ref()
+            .map(|provider| (provider, provider.model()));
+        dispatch(store, ai, method, params).await
     }
 
     fn tools(&self) -> Vec<serde_json::Value> {
@@ -178,6 +182,16 @@ fn ai_error(e: torii::IntakeError) -> (StatusCode, serde_json::Value) {
     }
 }
 
+/// `_meta` of an AI method's answer: the model always, usage when the
+/// provider reported it (same shape as satori.sense).
+fn ai_meta(model: &str, usage: Option<torii::AiUsage>) -> serde_json::Value {
+    let mut meta = json!({"model": model});
+    if let Some(usage) = usage {
+        meta["usage"] = json!(usage);
+    }
+    meta
+}
+
 const METHODS: &[&str] = &["torii.ingest_raw", "torii.list_raw", "torii.parse"];
 
 /// Pure MCP dispatch over the torii intake lib — no auth, no HTTP, so it is
@@ -186,7 +200,7 @@ const METHODS: &[&str] = &["torii.ingest_raw", "torii.list_raw", "torii.parse"];
 /// pair. Created RawItems are persisted before success is returned.
 async fn dispatch<P: torii::AiProvider>(
     store: &Store,
-    ai: Option<&P>,
+    ai: Option<(&P, &str)>,
     method: &str,
     params: serde_json::Value,
 ) -> Result<serde_json::Value, (StatusCode, serde_json::Value)> {
@@ -239,14 +253,16 @@ async fn dispatch<P: torii::AiProvider>(
                     json!({"error": "invalid_params", "detail": e.to_string()}),
                 )
             })?;
-            let Some(provider) = ai else {
+            let Some((provider, model)) = ai else {
                 return Err(ai_not_configured());
             };
             // Real AI operation: NL text → a provider-neutral TaskDraft.
-            let draft = torii::parse_task(provider, &p.input)
+            let (draft, usage) = torii::parse_task(provider, &p.input)
                 .await
                 .map_err(ai_error)?;
-            Ok(json!({ "method": "torii.parse", "task_draft": draft }))
+            let mut out = json!({ "method": "torii.parse", "task_draft": draft });
+            out["_meta"] = ai_meta(model, usage);
+            Ok(out)
         }
         "torii.list_raw" => {
             let p: ListParams = serde_json::from_value(params).map_err(|e| {
@@ -297,6 +313,7 @@ mod tests {
         method: &str,
         params: serde_json::Value,
     ) -> Result<serde_json::Value, (StatusCode, serde_json::Value)> {
+        let ai = ai.map(|provider| (provider, "test"));
         super::dispatch(&test_store().await, ai, method, params).await
     }
 
@@ -312,6 +329,18 @@ mod tests {
                 name: "create_task".into(),
                 arguments: self.args.clone(),
             })])
+        }
+
+        async fn respond_with_usage(
+            &self,
+            req: AiRequest,
+        ) -> Result<(Vec<AiOutput>, Option<torii::AiUsage>), AiError> {
+            let usage = torii::AiUsage {
+                input_tokens: Some(30),
+                output_tokens: Some(7),
+                total_tokens: Some(37),
+            };
+            Ok((self.respond(req).await?, Some(usage)))
         }
     }
 
@@ -390,7 +419,7 @@ mod tests {
         let store = Store::open(&path).await.unwrap();
         let created = super::dispatch(
             &store,
-            None::<&OpenAiProvider>,
+            None::<(&OpenAiProvider, &str)>,
             "torii.ingest_raw",
             json!({"source": "test", "kind": "event", "body": "persist me"}),
         )
@@ -400,7 +429,7 @@ mod tests {
         let reopened = Store::open(&path).await.unwrap();
         let listed = super::dispatch(
             &reopened,
-            None::<&OpenAiProvider>,
+            None::<(&OpenAiProvider, &str)>,
             "torii.list_raw",
             json!({}),
         )
@@ -411,7 +440,7 @@ mod tests {
         reopened.pool().close().await;
         let (code, body) = super::dispatch(
             &reopened,
-            None::<&OpenAiProvider>,
+            None::<(&OpenAiProvider, &str)>,
             "torii.ingest_raw",
             json!({"source": "test", "kind": "text", "body": "fail"}),
         )
@@ -447,6 +476,9 @@ mod tests {
         .await
         .expect("parse must succeed");
         assert_eq!(out["method"], "torii.parse");
+        // L-12: parse reports model and token usage like satori.sense.
+        assert_eq!(out["_meta"]["model"], "test");
+        assert_eq!(out["_meta"]["usage"]["total_tokens"], 37);
         let draft = &out["task_draft"];
         assert_eq!(draft["title"], "Buy milk");
         assert_eq!(draft["description"], "2%");

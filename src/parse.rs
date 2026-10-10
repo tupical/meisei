@@ -3,7 +3,7 @@
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::ai::{create_task_tool, wrap_untrusted, AiOutput, AiProvider, AiRequest};
+use crate::ai::{create_task_tool, wrap_untrusted, AiOutput, AiProvider, AiRequest, AiUsage};
 use crate::error::IntakeError;
 use crate::prompts::PromptRegistry;
 use crate::task::{Priority, Status, TaskDraft};
@@ -17,11 +17,12 @@ struct ParseCtx<'a> {
 ///
 /// Renders the `parse` prompt, calls `provider` with the `create_task`
 /// function tool, and maps the returned arguments onto [`TaskDraft`]. The
-/// concrete model client is supplied by the caller via [`AiProvider`].
+/// concrete model client is supplied by the caller via [`AiProvider`];
+/// its token usage, when reported, is returned alongside the draft.
 pub async fn parse_task<P: AiProvider>(
     provider: &P,
     input: &str,
-) -> Result<TaskDraft, IntakeError> {
+) -> Result<(TaskDraft, Option<AiUsage>), IntakeError> {
     let input = wrap_untrusted("task description to parse", input);
     let prompt = PromptRegistry::load("parse", "default", &ParseCtx { input: &input })?;
 
@@ -31,7 +32,7 @@ pub async fn parse_task<P: AiProvider>(
         tool_choice: Some("required".into()),
     };
 
-    let outputs = provider.respond(req).await?;
+    let (outputs, usage) = provider.respond_with_usage(req).await?;
 
     let tc = outputs
         .into_iter()
@@ -68,7 +69,7 @@ pub async fn parse_task<P: AiProvider>(
         draft.status = parse_status(s);
     }
 
-    Ok(draft)
+    Ok((draft, usage))
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -123,7 +124,8 @@ mod tests {
             args: r#"{"title":"Buy milk","description":"2%","priority":"p1","status":"todo"}"#
                 .into(),
         };
-        let draft = parse_task(&fake, "buy milk tomorrow").await.unwrap();
+        let (draft, usage) = parse_task(&fake, "buy milk tomorrow").await.unwrap();
+        assert_eq!(usage, None, "a provider without usage reports none");
         assert_eq!(draft.title, "Buy milk");
         assert_eq!(draft.description.as_deref(), Some("2%"));
         assert_eq!(draft.priority, Some(Priority::P1));
@@ -153,7 +155,7 @@ mod tests {
         let fake = FakeProvider {
             args: r#"{"title":"  Buy milk  "}"#.into(),
         };
-        let draft = parse_task(&fake, "x").await.unwrap();
+        let (draft, _) = parse_task(&fake, "x").await.unwrap();
         assert_eq!(draft.title, "Buy milk");
     }
 
