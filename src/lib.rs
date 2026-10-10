@@ -25,7 +25,7 @@ pub mod time;
 
 // ── Seam + operation re-exports ─────────────────────────────────────────────────
 pub use ai::{
-    create_task_tool, wrap_untrusted, AiError, AiOutput, AiProvider, AiRequest, ToolCall,
+    create_task_tool, wrap_untrusted, AiError, AiOutput, AiProvider, AiRequest, AiUsage, ToolCall,
 };
 pub use error::IntakeError;
 pub use parse::parse_task;
