@@ -38,7 +38,7 @@ fn sensing_kind_for(kind: RawItemKind) -> SensingItemKind {
 /// This translation demonstrates lineage, not a semantically justified enma decision.
 /// Hypotheses are refused per [ADR-0011](https://github.com/tupical/meisei.ru/blob/main/adr/0011-hypothesis-not-decision-worthy.md).
 pub fn decision_from_sensing(sensing: &SensingItem, actor: &TaActor) -> Option<NewDecision> {
-    if !is_decision_worthy(sensing.kind) {
+    if !enma::is_decision_worthy(sensing.kind.as_str()) {
         return None;
     }
     Some(NewDecision {
@@ -54,12 +54,6 @@ pub fn decision_from_sensing(sensing: &SensingItem, actor: &TaActor) -> Option<N
             reference: sensing.id.to_string(),
         }],
     })
-}
-
-/// Only Insight is eligible; a hypothesis is not a decision without verification
-/// ([ADR-0011](https://github.com/tupical/meisei.ru/blob/main/adr/0011-hypothesis-not-decision-worthy.md)).
-fn is_decision_worthy(kind: SensingItemKind) -> bool {
-    matches!(kind, SensingItemKind::Insight)
 }
 
 fn dec_actor_from(a: &TaActor) -> DecActor {
