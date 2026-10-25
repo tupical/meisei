@@ -30,6 +30,11 @@ sources, links and reconsider triggers), AI sensemaking operations (`sense`,
 primitives stay storage-agnostic; the server persists artifacts. The crate has no
 dependency on daruma or sibling layers; adapters live only inside the host.
 
+`satori.sense` asks for genuine unresolved questions within the material's scope.
+Self-contained material uses an empty `open_questions` array, rather than a
+statement such as "None". Explicit and model-reported questions still stop the
+request with `needs_input`.
+
 The unused embedding index/provider and semantic MCP methods were removed.
 Existing sidecar files are left untouched; old semantic environment flags have
 no effect. WorkspaceGraph FTS, lesson recall, downstream impact and capability profiles

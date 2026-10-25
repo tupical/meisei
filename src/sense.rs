@@ -61,7 +61,7 @@ pub async fn sense_ai<P: AiProvider>(
 ) -> Result<(SensingItem, Vec<String>, Option<AiUsage>), SensemakingError> {
     let req = AiRequest {
         input: Value::String(format!(
-            "Classify the material and return a concise factual summary. List any open questions the material leaves unanswered in open_questions.\n{}",
+            "Classify the material and return a concise factual summary. List only genuine unresolved questions about the material in open_questions. Do not invent requirements outside its stated scope or ask for an intended use of a self-contained fact. If there are no unresolved questions, return an empty array []. Never put statements such as 'None' or 'No substantive questions' in that array.\n{}",
             wrap_untrusted("material", material)
         )),
         tools: vec![json!({
@@ -74,7 +74,7 @@ pub async fn sense_ai<P: AiProvider>(
                     "kind": {"type": "string", "enum": ["knowledge", "question", "hypothesis", "risk", "contradiction", "insight", "rejected_idea", "research_gap"]},
                     "confidence": {"type": "number", "minimum": 0, "maximum": 1},
                     "summary": {"type": "string"},
-                    "open_questions": {"type": "array", "items": {"type": "string"}}
+                    "open_questions": {"type": "array", "description": "Genuine unresolved questions about this material; [] when there are none. No statements of completeness or out-of-scope follow-ups.", "items": {"type": "string"}}
                 },
                 "required": ["kind", "confidence", "summary", "open_questions"],
                 "additionalProperties": false
