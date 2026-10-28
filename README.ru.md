@@ -15,17 +15,27 @@ torii · <b>satori</b> · enma · yatagarasu · fujin · daruma
 
 Satori — **sensemaking**-слой конвейера MeiSei: превращает сырье intake в
 понимание. Владеет примитивами `SensingItem` (уверенность, источники, связи,
-триггеры пересмотра), AI-операциями осмысления (`sense`, `research` с
-аннотированием контекста задачи), process-mining'ом паттернов ответственности
-агентов (`profiles`) из потока событий daruma и опциональной семантической
-поверхностью (embedding-индекс + гибридный FTS-rerank + предложения связей).
-Доменные примитивы не зависят от хранилища; артефакты персистит сервер. Крейт
-не зависит от daruma и соседних слоёв; адаптеры живут только внутри host.
+триггеры пересмотра) и AI-операциями осмысления (`sense`, `research` с
+аннотированием контекста задачи). Доменные примитивы не зависят от хранилища;
+артефакты персистит сервер. Крейт не зависит от daruma и соседних слоёв;
+адаптеры живут только внутри host.
+
+`satori.sense` запрашивает только реальные нерешённые вопросы в рамках
+материала. Для самодостаточного материала `open_questions` — пустой массив, а
+не утверждение вроде «Нет». Явные вопросы и вопросы, о которых сообщила модель,
+по-прежнему останавливают запрос с `needs_input`.
+
+Неиспользуемые embedding-индекс/провайдер и семантические MCP-методы удалены.
+Существующие sidecar-файлы не трогаются; старые семантические env-флаги ни на
+что не влияют. FTS по WorkspaceGraph, recall уроков, downstream impact и
+capability profiles реализованы в Daruma. Неподключённые адаптеры
+search/impact и дублирующий майнер профилей из Satori удалены. `satori.recall`
+только читает сохранённые SensingItem для кабинета; это не recall уроков Daruma.
 
 ## Структура репозитория
 
-- `src/` — библиотека `satori`: типы SensingItem, `research`, `profiles`, recall,
-  семантические примитивы, реестр промптов, типы ошибок.
+- `src/` — библиотека `satori`: типы SensingItem, `research`, реестр промптов,
+  типы ошибок.
 - `server/` — `satori-server`, тонкая независимо развёртываемая HTTP/MCP-обёртка
   над библиотекой (axum/tokio-каркас — из [`layer-kit`](../layer-kit)).
 - `deploy/` — release-`build.sh` (прошивает git SHA в `/healthz`) и systemd user unit.
@@ -36,8 +46,7 @@ Satori — **sensemaking**-слой конвейера MeiSei: превраща�
 cargo run -p satori-server
 # GET  /healthz   — открытая проба живости/версии
 # POST /v1/mcp    — MCP-поверхность под платформенным токеном:
-#                   satori.sense, satori.recall, satori.research,
-#                   satori.profiles, satori.semantic_index, satori.semantic_search
+#                   satori.sense, satori.recall, satori.research
 ```
 
 Для продовых сборок используйте `deploy/build.sh`, чтобы `/healthz` отдавал
@@ -54,9 +63,6 @@ cargo run -p satori-server
 | `OPENAI_API_KEY` | не задан | Опциональный AI-провайдер для `satori.sense` / `satori.research`; без ключа — ответ `ai_not_configured` (503) |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Базовый URL OpenAI-совместимого API |
 | `OPENAI_MODEL` | `gpt-4.1` | Модель, используемая AI-операциями |
-| `SATORI_SEMANTIC_ENABLED` | выключен | Cost gate: `1` включает `satori.semantic_index` / `satori.semantic_search`; когда выключен — ответ `semantic_disabled` (403) |
-| `OPENAI_EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding-модель семантической поверхности; без ключа — ответ `embeddings_not_configured` (503) |
-| `SATORI_SEMANTIC_DIR` | `./data/semantic` | Каталог sidecar-индексов по воркспейсам |
 
 ## Документация
 

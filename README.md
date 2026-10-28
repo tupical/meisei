@@ -5,7 +5,7 @@ intent: "reference"
 owner: "MeiSei"
 status: "active"
 source_of_truth: "README.md"
-last_verified: "2026-09-11"
+last_verified: "2026-10-28"
 ---
 
 # Satori 悟り — sensemaking layer of Meisei
@@ -56,7 +56,7 @@ SensingItems for the cabinet; it is not Daruma lesson recall.
 cargo run -p satori-server
 # GET  /healthz   — open liveness/version probe
 # POST /v1/mcp    — platform-token gated MCP surface:
-#                   satori.sense, satori.recall, satori.research,
+#                   satori.sense, satori.recall, satori.research
 ```
 
 For production builds use `deploy/build.sh` so `/healthz` reports the real git SHA
