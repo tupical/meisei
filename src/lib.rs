@@ -24,7 +24,9 @@ pub mod adapters;
 use daruma_domain::{Actor, NewPlan};
 use daruma_shared::time;
 use enma::Decision;
-use fujin::{into_new_plan, to_handoff, ActionPacket, Gate, HandoffProject, TaskCandidate};
+use fujin::{
+    assess_with, ActionPacket, FujinStrictness, Gate, HandoffProject, Maturity, TaskCandidate,
+};
 use satori::types::SensingItem;
 use torii::raw_item::RawItem;
 use yatagarasu::PlanBrief;
@@ -90,13 +92,17 @@ pub fn run_lineage_fixture(raw: RawItem, actor: Actor) -> Result<PipelineRun, Pi
         &serde_json::to_value(&brief).expect("PlanBrief serializes"),
     ));
 
-    // 5. Exercise the §13 gate and lower onto Daruma's intake contract.
-    // Passing with fixture placeholders proves connectivity, not maturity.
+    // 5. Exercise the §13 gate (soft provenance, as before) and lower onto
+    // Daruma's intake contract. Passing with fixture placeholders proves
+    // connectivity, not maturity.
+    if let Maturity::NotReady { missing } = assess_with(&packet, FujinStrictness::Soft) {
+        return Err(PipelineError::Immature(format!(
+            "action packet is not mature; missing §13 fields: {}",
+            missing.join(", ")
+        )));
+    }
     let project = project_from_packet(&packet);
-    to_handoff(&packet, vec![project.clone()])
-        .map_err(|e| PipelineError::Immature(e.to_string()))?;
-    let lowered = into_new_plan(&project, fujin::ProjectId::new(), fujin::Actor::user());
-    let plan = adapters::lower_new_plan(lowered.plan);
+    let plan = adapters::lower_new_plan(&project, Actor::User);
 
     Ok(PipelineRun {
         raw,
@@ -129,12 +135,13 @@ fn fixture_brief(mut brief: PlanBrief) -> PlanBrief {
     brief
 }
 
-/// Marked fixture placeholders for the three execution-only §13 fields
-/// (`expected_artifacts`, `before_start`, `before_complete`), which have no
-/// §15 source. Like [`fixture_brief`], these are not planner decisions or
+/// Marked fixture placeholders for the execution-only §13 fields
+/// (`expected_artifacts`, `target_files.owned`, `before_start`,
+/// `before_complete`), which have no §15 source. Like [`fixture_brief`], these are not planner decisions or
 /// evidence of maturity; a real host stops without the layer's AI output.
 fn fixture_packet(mut packet: ActionPacket) -> ActionPacket {
     packet.expected_artifacts = vec!["[fixture] NewPlan lowered for Daruma".into()];
+    packet.target_files.owned = vec!["[fixture] src/lib.rs".into()];
     packet.before_start = vec![Gate {
         rule: "[fixture] brief is ready".into(),
     }];

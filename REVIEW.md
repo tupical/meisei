@@ -8,7 +8,8 @@ checkout ownership) lives in the reviewer prompt
 
 This repo is the umbrella: `meisei-pipeline`, a deterministic lineage fixture
 (`src/lib.rs`, `src/adapters.rs`, the `meisei` CLI in `src/bin/meisei.rs`,
-`tests/lineage.rs`) plus the layers pinned as git submodules. It owns no
+`tests/lineage.rs`) plus the layers, `layer-kit` and `hyakki` as ordinary
+directories; only `daruma/` is a git submodule. The fixture owns no
 business logic and makes no AI or network calls.
 
 ## What "broken" means here
@@ -30,24 +31,23 @@ acceptance criterion with no line in the diff.
    the decision-worthy rule in favour of `enma::is_decision_worthy`; two
    predicates had drifted. A new `match` on layer kinds, a re-implemented
    validation, or a gate the layer already has — blocker; the fix belongs in
-   the layer repo, followed by a submodule bump here.
+   the layer's own directory, in its own task.
 3. **Lineage is cut at a hop.** Each object carries its source id:
    `SensingLink.target` → `Decision.links[Sensemaking]` →
    `PlanBrief.decisions_made` → `ActionPacket.linked_decisions` →
    `NewPlan.source_brief`. `project_from_packet` and `lower_new_plan` must
    carry all three `linked_*` lists. Dropping or renaming one, or a test that
    checks a hop by something other than the id, is a blocker.
-4. **The pins do not build from a fresh clone.** Cargo resolves the layers
-   only through the submodules (`path = "torii"` …), and enma, fujin, satori
-   and torii find `layer-kit` as `../layer-kit` — inside this checkout that is
-   the `layer-kit/` submodule, not the sibling clone in
-   `~/projects/meisei/layer-kit`. A bump is correct only if the new gitlink
-   commit is on the layer's default branch on origin (torii, satori,
-   yatagarasu, daruma: `main`; enma, fujin, layer-kit: `master`) and a layer
-   bump that needs newer layer-kit bumps `layer-kit/` in the same diff. Check:
-   `git ls-tree HEAD <layer>` and `git -C ~/projects/meisei/<layer>
-   merge-base --is-ancestor <sha> origin/<default>`. Green in the sibling
-   clone does not prove the umbrella builds.
+4. **The tree does not build from a fresh clone.** Cargo resolves the layers
+   through in-repo paths (`path = "torii"` …), and every layer finds
+   `layer-kit` as `../layer-kit` — inside this checkout that is the
+   `layer-kit/` directory, never a sibling clone in
+   `~/projects/meisei/layer-kit`. A layer change that needs newer
+   `layer-kit` changes `layer-kit/` in the same diff. The only gitlink is
+   `daruma/`; a bump is correct only if the new commit is on daruma's `main`
+   on origin (`git ls-tree HEAD daruma`, `git -C ~/projects/meisei/daruma
+   merge-base --is-ancestor <sha> origin/main`). Green in a sibling clone does
+   not prove the umbrella builds.
 5. **Something leaks into a public repo.** This repo and all layers are
    public. A tracked `.omc/`, `.serena/` or other agent state, home paths,
    tokens or internal ids (the class behind the torii/enma/fujin
@@ -64,17 +64,18 @@ acceptance criterion with no line in the diff.
 
 - Style, naming, "could be cleaner" — at most **3 remarks** per pass, in one
   comment after the blockers. Drop the rest.
-- A defect inside a layer's own code reached through a submodule bump: review
-  it in that layer's task and repo; here check only the pin, the build and
+- A pre-existing defect inside a layer's own code that the diff does not
+  touch: review it in that layer's task; here check only the pin, the build and
   the lineage tests.
 - `cargo fmt` drift in files the diff does not touch.
 
 ## Paths to skip
 
-- `torii/` `satori/` `enma/` `yatagarasu/` `fujin/` `daruma/` `layer-kit/` —
-  submodule contents. Review only the gitlink change (class 4).
+- `daruma/` — submodule contents. Review only the gitlink change (class 4).
+  Changes in the layer directories are reviewed as code; a diff that only
+  imports a layer tree is checked by tree identity with its source commit.
 - `target/` — build output. `Cargo.lock` — only check that it matches a
-  `Cargo.toml` change or a submodule bump in the same diff.
+  `Cargo.toml` change or a layer/`daruma` change in the same diff.
 - `.omc/`, `.serena/` — local agent state, never part of a diff here. Their
   presence in `git status` is a checkout-ownership question for the reviewer
   prompt; tracked, they are class 5.
@@ -83,9 +84,9 @@ acceptance criterion with no line in the diff.
 
 `cargo clippy --all-targets -- -D warnings` and `cargo test --no-fail-fast`
 (four tests in `tests/lineage.rs`), from a checkout with
-`git submodule update --init --recursive`. CI (`.github/workflows/rust.yml`)
+`git submodule update --init --recursive` (for `daruma/`). CI (`.github/workflows/rust.yml`)
 runs the same on push to `main` and on PRs touching `.rs`, `Cargo.*`, the
-workflow itself or a gitlink.
+workflow itself, a layer directory or the `daruma` gitlink.
 
 ## Evidence
 
