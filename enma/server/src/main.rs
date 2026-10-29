@@ -1,0 +1,750 @@
+//! enma-server — thin, independently-deployed HTTP/MCP wrapper around the
+//! `enma` decisions lib. Its own deploy unit (own systemd service, own port).
+//! Boundary-clean: no mcpbox dependency; the platform→tool auth contract and
+//! the axum/tokio scaffold live in `layer_kit::{auth,serve}`.
+//!
+//! Routes:
+//!   GET  /healthz   — open; liveness + version for the platform registry.
+//!   POST /v1/mcp    — requires a valid platform token; decisions surface
+//!                     (`enma.decide` builds a typed Decision via the lib).
+//!
+//! Env: ENMA_PORT (default 8092), ENMA_PLATFORM_SECRET (HMAC key; if unset,
+//! /v1/mcp is closed), ENMA_VERSION, and OPENAI_*; without it `enma.decide`
+//! answers 503 `ai_not_configured`.
+
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use axum::http::StatusCode;
+use enma::{Actor, Decision, Timestamp};
+use layer_kit::ai::extract_ai_config;
+use layer_kit::auth::Claims;
+use layer_kit::openai::{AiConfig, OpenAiProvider};
+use layer_kit::serve::{serve, McpHandler, ServeConfig};
+use layer_kit::store::Store;
+use serde_json::json;
+
+const TOOL: &str = "enma";
+
+/// Dispatches enma's MCP methods and owns the optional env fallback provider.
+struct Handler {
+    ai: Option<OpenAiProvider>,
+    store: Store,
+}
+
+impl McpHandler for Handler {
+    async fn dispatch(
+        &self,
+        claims: &Claims,
+        method: &str,
+        mut params: serde_json::Value,
+    ) -> Result<serde_json::Value, (StatusCode, serde_json::Value)> {
+        // One store serves every tenant: confine this call to the token's scope.
+        let store = &self
+            .store
+            .scoped(&claims.workspace, claims.project.as_deref());
+        if let Some(cfg) = extract_ai_config(&mut params) {
+            let provider = OpenAiProvider::new(cfg);
+            dispatch(store, Some((&provider, provider.model())), method, params).await
+        } else {
+            dispatch(
+                store,
+                self.ai.as_ref().map(|p| (p, p.model())),
+                method,
+                params,
+            )
+            .await
+        }
+    }
+
+    fn tools(&self) -> Vec<serde_json::Value> {
+        tools()
+    }
+}
+
+/// Tool descriptors for `tools/list` — one per method actually handled by
+/// [`dispatch`].
+fn tools() -> Vec<serde_json::Value> {
+    let mut tools = vec![json!({
+        "name": "enma_decide",
+        "description": "Build a typed Decision from a decision statement, optionally linked to an upstream sensing item.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "statement": {"type": "string"},
+                "source_ref": {"type": "string"},
+                "decided_by": {"type": "object"}
+            },
+            "required": ["statement"]
+        }
+    })];
+    for (name, description) in [
+        ("enma_list", "List persisted Decisions."),
+        ("enma_list_decisions", "List persisted Decisions."),
+        ("enma_get", "Get a persisted Decision by id."),
+        ("enma_get_decision", "Get a persisted Decision by id."),
+    ] {
+        let get = name.contains("get");
+        tools.push(json!({
+            "name": name,
+            "description": description,
+            "inputSchema": if get {
+                json!({"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]})
+            } else {
+                json!({"type": "object", "properties": {"limit": {"type": "integer", "minimum": 1}}})
+            }
+        }));
+    }
+    tools
+}
+
+#[tokio::main]
+async fn main() {
+    tracing_subscriber::fmt().json().init();
+    let store = Store::from_env(TOOL).await.unwrap_or_else(|e| {
+        tracing::error!(error = %e, "failed to open enma store");
+        std::process::exit(1);
+    });
+    let ai = AiConfig::from_env().map(OpenAiProvider::new);
+    if ai.is_none() {
+        tracing::warn!("OPENAI_API_KEY unset — enma.decide will answer ai_not_configured");
+    }
+
+    serve(
+        ServeConfig {
+            tool: TOOL,
+            default_port: 8092,
+            default_version: env!("CARGO_PKG_VERSION"),
+            git_sha: option_env!("GIT_SHA").unwrap_or("dev"),
+        },
+        Handler { ai, store },
+    )
+    .await;
+}
+
+fn now_secs() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+fn now_timestamp() -> Timestamp {
+    (UNIX_EPOCH + Duration::from_secs(now_secs() as u64)).into()
+}
+
+/// Params for `enma.decide`.
+#[derive(serde::Deserialize)]
+struct DecideParams {
+    statement: String,
+    /// Optional provenance: upstream SensingItem id, recorded as a typed
+    /// Sensemaking link so lineage survives the network hop.
+    #[serde(default)]
+    source_ref: Option<String>,
+    #[serde(default)]
+    sensing_item: Option<serde_json::Value>,
+    #[serde(default)]
+    decided_by: Option<Actor>,
+}
+
+#[derive(serde::Deserialize)]
+struct ListParams {
+    #[serde(default = "default_limit")]
+    limit: i64,
+}
+
+#[derive(serde::Deserialize)]
+struct GetParams {
+    id: String,
+}
+
+fn default_limit() -> i64 {
+    100
+}
+
+fn storage_error(e: impl std::fmt::Display) -> (StatusCode, serde_json::Value) {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        json!({"error": "storage_error", "detail": e.to_string()}),
+    )
+}
+
+const METHODS: &[&str] = &[
+    "enma.decide",
+    "enma.list",
+    "enma.list_decisions",
+    "enma.get",
+    "enma.get_decision",
+];
+
+/// Pure MCP dispatch over the enma decisions lib — no auth, no HTTP, so it is
+/// unit-testable directly. Decisions are persisted before success is returned.
+async fn dispatch<P: enma::AiProvider>(
+    store: &Store,
+    ai: Option<(&P, &str)>,
+    method: &str,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, (StatusCode, serde_json::Value)> {
+    if !METHODS.contains(&method) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            json!({"error": "unknown_method", "detail": method}),
+        ));
+    }
+    match method {
+        "enma.decide" => {
+            let p: DecideParams = serde_json::from_value(params).map_err(|e| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    json!({"error": "invalid_params", "detail": e.to_string()}),
+                )
+            })?;
+            if p.statement.trim().is_empty() {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    json!({"error": "invalid_params", "detail": "statement must be non-empty"}),
+                ));
+            }
+            // ADR-0011 fail-closed gate: an untested hypothesis never becomes
+            // a decision. Deterministic, before any AI call; without a
+            // `sensing_item` the tool behaves as before.
+            if let Some(item) = &p.sensing_item {
+                let kind = item["kind"].as_str().unwrap_or_default();
+                if enma::blocks_decision(kind) {
+                    return Err((
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        json!({"error": "not_decision_worthy", "kind": kind}),
+                    ));
+                }
+            }
+            let (provider, model) = ai.ok_or_else(|| {
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    json!({"error": "ai_not_configured", "detail": "AI provider is not configured"}),
+                )
+            })?;
+            // Without an explicit human author the model made the call, so the
+            // decision is the agent's until a human confirms it.
+            let decided = enma::decide_ai(
+                provider,
+                &p.statement,
+                p.source_ref,
+                p.decided_by.unwrap_or_else(|| Actor::agent(model)),
+                now_timestamp(),
+            )
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::BAD_GATEWAY,
+                    json!({"error": "ai_error", "detail": e.to_string()}),
+                )
+            })?;
+            let (decision, directives, usage) = match decided {
+                enma::Decided::Decision(decision, directives, usage) => {
+                    (decision, directives, usage)
+                }
+                enma::Decided::NeedsInput(questions) => {
+                    return Err((
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        json!({"error": "needs_input", "questions": questions}),
+                    ))
+                }
+            };
+            store
+                .put("decision", &decision.id.as_uuid().to_string(), &decision)
+                .await
+                .map_err(storage_error)?;
+            for directive in &directives {
+                store
+                    .put("directive", &directive.id.as_uuid().to_string(), directive)
+                    .await
+                    .map_err(storage_error)?;
+            }
+            let mut meta = json!({"model": model});
+            if let Some(usage) = usage {
+                meta["usage"] = json!(usage);
+            }
+            let mut out = json!({ "method": "enma.decide", "decision": decision, "_meta": meta });
+            if !directives.is_empty() {
+                out["directives"] = json!(directives);
+            }
+            if let Some(sensing_item) = p.sensing_item {
+                out["sensing_item"] = sensing_item;
+            }
+            Ok(out)
+        }
+        "enma.list" | "enma.list_decisions" => {
+            let p: ListParams = serde_json::from_value(params).map_err(|e| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    json!({"error": "invalid_params", "detail": e.to_string()}),
+                )
+            })?;
+            let decisions: Vec<Decision> = store
+                .list("decision", p.limit)
+                .await
+                .map_err(storage_error)?;
+            Ok(json!({"method": method, "decisions": decisions}))
+        }
+        "enma.get" | "enma.get_decision" => {
+            let p: GetParams = serde_json::from_value(params).map_err(|e| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    json!({"error": "invalid_params", "detail": e.to_string()}),
+                )
+            })?;
+            let decision: Option<Decision> =
+                store.get("decision", &p.id).await.map_err(storage_error)?;
+            decision
+                .map(|decision| json!({"method": method, "decision": decision}))
+                .ok_or_else(|| {
+                    (
+                        StatusCode::NOT_FOUND,
+                        json!({"error": "not_found", "detail": p.id}),
+                    )
+                })
+        }
+        other => Err((
+            StatusCode::BAD_REQUEST,
+            json!({"error": "unknown_method", "detail": other}),
+        )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use enma::{AiError, AiOutput, AiRequest, AiUsage, ToolCall};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static DB_SEQ: AtomicU64 = AtomicU64::new(1);
+
+    fn db_path() -> String {
+        std::env::temp_dir()
+            .join(format!(
+                "enma-server-{}-{}.db",
+                std::process::id(),
+                DB_SEQ.fetch_add(1, Ordering::Relaxed)
+            ))
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    async fn test_store() -> Store {
+        Store::open(&db_path()).await.unwrap()
+    }
+
+    async fn dispatch<P: enma::AiProvider>(
+        ai: Option<(&P, &str)>,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, (StatusCode, serde_json::Value)> {
+        super::dispatch(&test_store().await, ai, method, params).await
+    }
+
+    struct Fake(Result<Vec<AiOutput>, AiError>);
+
+    fn successful_fake(statement: &str, rationale: &str) -> Fake {
+        Fake(Ok(vec![AiOutput::ToolCall(ToolCall {
+            name: "record_decision".into(),
+            arguments: json!({"statement": statement, "rationale": rationale}).to_string(),
+        })]))
+    }
+
+    impl enma::AiProvider for Fake {
+        async fn respond(&self, _req: AiRequest) -> Result<Vec<AiOutput>, AiError> {
+            self.0.clone()
+        }
+
+        async fn respond_with_usage(
+            &self,
+            _req: AiRequest,
+        ) -> Result<(Vec<AiOutput>, Option<AiUsage>), AiError> {
+            Ok((
+                self.0.clone()?,
+                Some(AiUsage {
+                    input_tokens: Some(123),
+                    output_tokens: Some(45),
+                    total_tokens: Some(168),
+                }),
+            ))
+        }
+    }
+
+    #[tokio::test]
+    async fn decide_builds_decision_with_sensemaking_provenance() {
+        let fake = successful_fake("Use Postgres for durability", "Integrity matters");
+        let out = dispatch(
+            Some((&fake, "test")),
+            "enma.decide",
+            json!({
+                "statement": "Use Postgres for the primary store",
+                "source_ref": "sense_abc"
+            }),
+        )
+        .await
+        .expect("decide must succeed");
+        let decision = &out["decision"];
+        assert_eq!(decision["statement"], "Use Postgres for durability");
+        assert!(
+            decision["id"].as_str().is_some(),
+            "Decision must carry an id"
+        );
+        assert_eq!(decision["links"][0]["kind"], "sensemaking");
+        assert_eq!(decision["links"][0]["reference"], "sense_abc");
+        assert_eq!(out["_meta"]["model"], "test");
+    }
+
+    /// ADR-0011: a hypothesis is refused before the model is asked, in both
+    /// modes (provider configured or not), and nothing is persisted.
+    #[tokio::test]
+    async fn hypothesis_is_not_decision_worthy_with_or_without_provider() {
+        let fake = successful_fake("Rewrite the cache layer", "Model says so");
+        let params = json!({
+            "statement": "the cache layer is probably the bottleneck",
+            "source_ref": "sense_h",
+            "sensing_item": {"id": "sense_h", "kind": "hypothesis", "body": "cache is slow"}
+        });
+        let store = test_store().await;
+        for ai in [Some((&fake, "test")), None] {
+            let (code, body) = super::dispatch(&store, ai, "enma.decide", params.clone())
+                .await
+                .unwrap_err();
+            assert_eq!(code, StatusCode::UNPROCESSABLE_ENTITY);
+            assert_eq!(
+                body,
+                json!({"error": "not_decision_worthy", "kind": "hypothesis"})
+            );
+        }
+        let listed = super::dispatch(
+            &store,
+            None::<(&OpenAiProvider, &str)>,
+            "enma.list",
+            json!({}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(listed["decisions"], json!([]));
+    }
+
+    #[tokio::test]
+    async fn insight_is_decided_with_provenance_and_echoed_item() {
+        let fake = successful_fake("Cache reads in Redis", "Hot keys dominate");
+        let out = dispatch(
+            Some((&fake, "test")),
+            "enma.decide",
+            json!({
+                "statement": "hot keys dominate read latency",
+                "source_ref": "sense_i",
+                "sensing_item": {"id": "sense_i", "kind": "insight", "body": "hot keys"}
+            }),
+        )
+        .await
+        .expect("an insight is decision-worthy");
+        assert_eq!(out["decision"]["links"][0]["kind"], "sensemaking");
+        assert_eq!(out["decision"]["links"][0]["reference"], "sense_i");
+        assert_eq!(out["sensing_item"]["kind"], "insight");
+    }
+
+    #[tokio::test]
+    async fn read_methods_and_unknown_method_rejected() {
+        let out = dispatch(None::<(&OpenAiProvider, &str)>, "enma.list", json!({}))
+            .await
+            .unwrap();
+        assert_eq!(out["decisions"], json!([]));
+        let (code, _) = dispatch(None::<(&OpenAiProvider, &str)>, "enma.nope", json!({}))
+            .await
+            .unwrap_err();
+        assert_eq!(code, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn decision_persists_across_restart_and_write_errors_surface() {
+        let path = db_path();
+        let store = Store::open(&path).await.unwrap();
+        let fake = successful_fake("Persist", "Persistence matters");
+        let created = super::dispatch(
+            &store,
+            Some((&fake, "test")),
+            "enma.decide",
+            json!({"statement": "Persist", "source_ref": "sense_1"}),
+        )
+        .await
+        .unwrap();
+        let id = created["decision"]["id"].as_str().unwrap().to_owned();
+        drop(store);
+
+        let reopened = Store::open(&path).await.unwrap();
+        let got = super::dispatch(
+            &reopened,
+            None::<(&OpenAiProvider, &str)>,
+            "enma.get_decision",
+            json!({"id": id}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(got["decision"]["statement"], "Persist");
+
+        reopened.pool().close().await;
+        let (code, body) = super::dispatch(
+            &reopened,
+            Some((&fake, "test")),
+            "enma.decide",
+            json!({"statement": "Fail"}),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(code, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(body["error"], "storage_error");
+    }
+
+    #[tokio::test]
+    async fn tools_list_names_are_all_dispatchable() {
+        for tool in tools() {
+            let name = tool["name"].as_str().unwrap();
+            let method = name.replacen('_', ".", 1);
+            if let Err((_, body)) =
+                dispatch(None::<(&OpenAiProvider, &str)>, &method, json!({})).await
+            {
+                assert_ne!(body["error"], "unknown_method", "{method} must be real");
+            }
+        }
+    }
+
+    #[test]
+    fn tools_catalogue_matches_methods() {
+        layer_kit::test_support::assert_catalogue_matches(&tools(), METHODS);
+    }
+
+    #[tokio::test]
+    async fn decide_rejects_bad_params() {
+        for params in [
+            json!({"source_ref": "sense_abc"}),
+            json!({"statement": "  "}),
+        ] {
+            let (code, body) = dispatch(None::<(&OpenAiProvider, &str)>, "enma.decide", params)
+                .await
+                .unwrap_err();
+            assert_eq!(code, StatusCode::BAD_REQUEST);
+            assert_eq!(body["error"], "invalid_params");
+        }
+    }
+
+    #[tokio::test]
+    async fn decide_without_ai_is_unavailable_and_does_not_persist() {
+        let store = test_store().await;
+        let (code, body) = super::dispatch(
+            &store,
+            None::<(&OpenAiProvider, &str)>,
+            "enma.decide",
+            json!({"statement": "Do not persist"}),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(code, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body["error"], "ai_not_configured");
+
+        let listed = super::dispatch(
+            &store,
+            None::<(&OpenAiProvider, &str)>,
+            "enma.list",
+            json!({}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(listed["decisions"], json!([]));
+    }
+
+    #[tokio::test]
+    async fn request_ai_builds_decision_without_leaking_secret() {
+        let fake = successful_fake("Use Postgres", "Integrity matters");
+        let mut params = json!({
+            "statement": "database sensing",
+            "source_ref": "sense_abc",
+            "sensing_item": {"id": "sense_abc", "body": "database sensing", "kind": "knowledge"},
+            "ai": {"api_key": "sk-secret", "base_url": "https://ai.test/v1", "model": "test"}
+        });
+        assert!(extract_ai_config(&mut params).is_some());
+        let store = test_store().await;
+        let out = super::dispatch(&store, Some((&fake, "test")), "enma.decide", params)
+            .await
+            .unwrap();
+        assert_eq!(out["decision"]["statement"], "Use Postgres");
+        assert_eq!(out["decision"]["rationale"], "Integrity matters");
+        let decision: enma::Decision = serde_json::from_value(out["decision"].clone()).unwrap();
+        assert!(decision.alternatives.is_empty());
+        assert_eq!(out["sensing_item"]["id"], "sense_abc");
+        assert_eq!(out["_meta"]["model"], "test");
+        assert_eq!(out["_meta"]["usage"]["total_tokens"], 168);
+        let id = out["decision"]["id"].as_str().unwrap();
+        let stored: serde_json::Value = store.get("decision", id).await.unwrap().unwrap();
+        assert!(stored.get("_meta").is_none());
+        assert!(!out.to_string().contains("sk-secret"));
+    }
+
+    #[tokio::test]
+    async fn constraints_become_constraint_directives_next_to_decision() {
+        let fake = Fake(Ok(vec![AiOutput::ToolCall(ToolCall {
+            name: "record_decision".into(),
+            arguments: json!({
+                "statement": "Use Postgres", "rationale": "Integrity matters",
+                "constraints": ["No downtime", " ", "No downtime", "Stay on-prem"]
+            })
+            .to_string(),
+        })]));
+        let store = test_store().await;
+        let out = super::dispatch(
+            &store,
+            Some((&fake, "test")),
+            "enma.decide",
+            json!({"statement": "database sensing", "source_ref": "sense_abc"}),
+        )
+        .await
+        .unwrap();
+        let directives: Vec<enma::Directive> =
+            serde_json::from_value(out["directives"].clone()).unwrap();
+        let statements: Vec<&str> = directives.iter().map(|d| d.statement.as_str()).collect();
+        assert_eq!(statements, ["No downtime", "Stay on-prem"]);
+        let decision_id = out["decision"]["id"].as_str().unwrap();
+        for directive in &directives {
+            assert_eq!(directive.kind, enma::DirectiveKind::Constraint);
+            assert!(directive.rationale.contains(decision_id));
+            assert_eq!(
+                directive.links,
+                vec![enma::Link::Sensemaking {
+                    reference: "sense_abc".into()
+                }]
+            );
+            let stored: Option<enma::Directive> = store
+                .get("directive", &directive.id.as_uuid().to_string())
+                .await
+                .unwrap();
+            assert_eq!(stored.as_ref(), Some(directive));
+        }
+    }
+
+    #[tokio::test]
+    async fn decision_without_constraints_has_no_directives() {
+        let fake = successful_fake("Use Postgres", "Integrity matters");
+        let out = dispatch(
+            Some((&fake, "test")),
+            "enma.decide",
+            json!({"statement": "x"}),
+        )
+        .await
+        .unwrap();
+        assert!(out.get("directives").is_none());
+    }
+
+    #[tokio::test]
+    async fn undecidable_is_needs_input_and_does_not_persist() {
+        let fake = Fake(Ok(vec![AiOutput::ToolCall(ToolCall {
+            name: "record_decision".into(),
+            arguments: json!({"decidable": false, "open_questions": ["Which DB?", " "]})
+                .to_string(),
+        })]));
+        let store = test_store().await;
+        let (code, body) = super::dispatch(
+            &store,
+            Some((&fake, "test")),
+            "enma.decide",
+            json!({"statement": "should we migrate?"}),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(code, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(body["error"], "needs_input");
+        assert_eq!(body["questions"], json!(["Which DB?"]));
+        let listed = super::dispatch(
+            &store,
+            None::<(&OpenAiProvider, &str)>,
+            "enma.list",
+            json!({}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(listed["decisions"], json!([]));
+    }
+
+    #[tokio::test]
+    async fn decided_by_defaults_to_agent_and_explicit_user_wins() {
+        let fake = Fake(Ok(vec![AiOutput::ToolCall(ToolCall {
+            name: "record_decision".into(),
+            arguments: json!({
+                "decidable": true, "statement": "s", "rationale": "r",
+                "consequences": ["c"], "revisit_when": "if load grows"
+            })
+            .to_string(),
+        })]));
+        let out = dispatch(
+            Some((&fake, "m1")),
+            "enma.decide",
+            json!({"statement": "x"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(out["decision"]["decided_by"]["kind"], "agent");
+        assert_eq!(out["decision"]["decided_by"]["id"], "m1");
+        assert_eq!(out["decision"]["revisit_when"], "if load grows");
+        assert_eq!(out["decision"]["consequences"], json!(["c"]));
+        let out = dispatch(
+            Some((&fake, "m1")),
+            "enma.decide",
+            json!({"statement": "x", "decided_by": {"kind": "user", "id": "user"}}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(out["decision"]["decided_by"]["kind"], "user");
+    }
+
+    #[tokio::test]
+    async fn request_ai_failure_is_ai_error() {
+        let (code, body) = dispatch(
+            Some((&Fake(Err(AiError::new("boom"))), "test")),
+            "enma.decide",
+            json!({"statement": "sensing"}),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(code, StatusCode::BAD_GATEWAY);
+        assert_eq!(body["error"], "ai_error");
+    }
+
+    /// daruma 01a0d3bc: one layer server serves every tenant — the platform
+    /// token's workspace confines every read, so ws B never sees ws A's objects.
+    #[tokio::test]
+    async fn token_of_one_workspace_never_sees_another() {
+        let claims = |ws: &str| Claims {
+            workspace: ws.into(),
+            project: None,
+            tool: TOOL.into(),
+            exp: i64::MAX,
+        };
+        let store = test_store().await;
+        let fake = successful_fake("secret of A", "why");
+        let out = super::dispatch(
+            &store.scoped("ws_a", None),
+            Some((&fake, "test")),
+            "enma.decide",
+            json!({"statement": "s", "source_ref": "sense_a"}),
+        )
+        .await
+        .unwrap();
+        let id = out["decision"]["id"].as_str().unwrap().to_owned();
+        let handler = Handler { ai: None, store };
+        let b = handler
+            .dispatch(&claims("ws_b"), "enma.list", json!({}))
+            .await
+            .unwrap();
+        assert_eq!(b["decisions"], json!([]));
+        let (code, _) = handler
+            .dispatch(&claims("ws_b"), "enma.get", json!({"id": id}))
+            .await
+            .unwrap_err();
+        assert_eq!(code, StatusCode::NOT_FOUND);
+        let a = handler
+            .dispatch(&claims("ws_a"), "enma.list", json!({}))
+            .await
+            .unwrap();
+        assert_eq!(a["decisions"][0]["statement"], "secret of A");
+    }
+}

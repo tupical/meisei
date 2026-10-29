@@ -1,0 +1,80 @@
+//! `enma` — the Decisions layer of the the host family.
+//!
+//! In the the host pipeline (Intake → Sensemaking → **Decisions** → Planning →
+//! Actions → execution; vision.md §6.3, §10) the Decisions layer turns
+//! understanding into *direction*. It owns the goal-and-decision primitives:
+//!
+//! - [`Decision`] — a recorded choice, with its statement, author, date,
+//!   rationale, the [`Alternative`]s weighed, the consequences accepted, and
+//!   the conditions under which it should be revisited;
+//! - [`Directive`] — the six lighter direction primitives discriminated by
+//!   [`DirectiveKind`]: `goal`, `non_goal`, `constraint`, `assumption`,
+//!   `principle`, `success_criteria`.
+//!
+//! Both [`Link`] back to the Sensemaking they rest on and forward to the
+//! Planning they inform.
+//!
+//! # Contract
+//! - Decisions **never executes**. It only *fixes the choice* — nothing here
+//!   schedules, runs, or mutates a plan. Realising a decision is Planning's
+//!   and Actions' job.
+//! - Domain primitives stay pure; [`decide_ai`] is a provider-neutral async
+//!   operation. This crate has no dependency on daruma or sibling layers.
+//! - All JSON is serde-derived; ids, `Timestamp`, and `Actor` are local
+//!   primitives — the host maps them to/from daruma types when wiring.
+
+pub mod actor;
+pub mod ai;
+pub mod decide;
+pub mod decision;
+pub mod directive;
+pub mod error;
+pub mod id;
+pub mod link;
+pub mod time;
+
+pub use actor::{Actor, ActorKind};
+pub use ai::{AiError, AiOutput, AiProvider, AiRequest, AiUsage, ToolCall};
+pub use decide::{decide_ai, Decided};
+pub use decision::{Alternative, Decision, DecisionError, NewDecision};
+pub use directive::{Directive, DirectiveKind, NewDirective};
+pub use error::DecidingError;
+pub use id::{DecisionId, DirectiveId, PlanId, ProjectId, TaskId};
+pub use link::Link;
+pub use time::Timestamp;
+
+/// Only insights are promotion candidates (ADR-0011): a hypothesis is an
+/// untested claim, not a decision, until it is confirmed as insight/knowledge
+/// or explicitly rejected.
+pub fn is_decision_worthy(sensing_kind: &str) -> bool {
+    matches!(sensing_kind, "insight")
+}
+
+/// Kinds `enma.decide` refuses outright (ADR-0011 fail-closed gate): an
+/// untested hypothesis never becomes a decision. Narrower than
+/// [`is_decision_worthy`] on purpose — a hypothesis confirmed as `knowledge`
+/// continues on the product path as before (ADR-0011 §4).
+pub fn blocks_decision(sensing_kind: &str) -> bool {
+    matches!(sensing_kind, "hypothesis")
+}
+
+#[cfg(test)]
+mod adapter_tests {
+    use super::*;
+
+    #[test]
+    fn decision_worthy_sensing_kinds_are_selected() {
+        assert!(is_decision_worthy("insight"));
+        assert!(!is_decision_worthy("hypothesis"));
+        assert!(!is_decision_worthy("knowledge"));
+        assert!(!is_decision_worthy("rejected_idea"));
+    }
+
+    #[test]
+    fn only_hypothesis_blocks_a_decision() {
+        assert!(blocks_decision("hypothesis"));
+        assert!(!blocks_decision("insight"));
+        assert!(!blocks_decision("knowledge"));
+        assert!(!blocks_decision(""));
+    }
+}
