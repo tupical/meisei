@@ -1,0 +1,74 @@
+# Satori 悟り — sensemaking-слой Meisei
+
+> **Meisei** 明晰 («ясность») — открытый конвейер, который проводит сырой замысел
+> через понимание → решение → план → действие к готовому результату.
+
+[![Meisei](https://img.shields.io/badge/meisei-明晰-1f2937.svg)](https://meisei.ru)
+[![License: Apache-2.0 WITH Commons-Clause](https://img.shields.io/badge/license-Apache--2.0%20WITH%20Commons--Clause-blue.svg)](LICENSE)
+
+<sub>
+torii · <b>satori</b> · enma · yatagarasu · fujin · daruma
+&nbsp;—&nbsp; intake · <b>осмысление</b> · решения · планирование · действия · исполнение (терминальный слой)
+</sub>
+
+## Что это
+
+Satori — **sensemaking**-слой конвейера MeiSei: превращает сырье intake в
+понимание. Владеет примитивами `SensingItem` (уверенность, источники, связи,
+триггеры пересмотра) и AI-операциями осмысления (`sense`, `research` с
+аннотированием контекста задачи). Доменные примитивы не зависят от хранилища;
+артефакты персистит сервер. Крейт не зависит от daruma и соседних слоёв;
+адаптеры живут только внутри host.
+
+`satori.sense` запрашивает только реальные нерешённые вопросы в рамках
+материала. Для самодостаточного материала `open_questions` — пустой массив, а
+не утверждение вроде «Нет». Явные вопросы и вопросы, о которых сообщила модель,
+по-прежнему останавливают запрос с `needs_input`.
+
+Неиспользуемые embedding-индекс/провайдер и семантические MCP-методы удалены.
+Существующие sidecar-файлы не трогаются; старые семантические env-флаги ни на
+что не влияют. FTS по WorkspaceGraph, recall уроков, downstream impact и
+capability profiles реализованы в Daruma. Неподключённые адаптеры
+search/impact и дублирующий майнер профилей из Satori удалены. `satori.recall`
+только читает сохранённые SensingItem для кабинета; это не recall уроков Daruma.
+
+## Структура репозитория
+
+- `src/` — библиотека `satori`: типы SensingItem, `research`, реестр промптов,
+  типы ошибок.
+- `server/` — `satori-server`, тонкая независимо развёртываемая HTTP/MCP-обёртка
+  над библиотекой (axum/tokio-каркас — из [`layer-kit`](../layer-kit)).
+- `deploy/` — release-`build.sh` (прошивает git SHA в `/healthz`) и systemd user unit.
+
+## Сборка и запуск
+
+```sh
+cargo run -p satori-server
+# GET  /healthz   — открытая проба живости/версии
+# POST /v1/mcp    — MCP-поверхность под платформенным токеном:
+#                   satori.sense, satori.recall, satori.research
+```
+
+Для продовых сборок используйте `deploy/build.sh`, чтобы `/healthz` отдавал
+реальный git SHA, а не `"dev"`.
+
+## Конфигурация (env)
+
+| Переменная | По умолчанию | Назначение |
+| --- | --- | --- |
+| `SATORI_PORT` | `8091` | HTTP-порт |
+| `SATORI_PLATFORM_SECRET` | не задан | HMAC-ключ; если не задан, `/v1/mcp` закрыт |
+| `SATORI_VERSION` | версия крейта | Версия, отдаваемая `/healthz` |
+| `SATORI_DB` | `./satori.db` | Путь к SQLite-хранилищу (`layer_kit::store::Store`) |
+| `OPENAI_API_KEY` | не задан | Опциональный AI-провайдер для `satori.sense` / `satori.research`; без ключа — ответ `ai_not_configured` (503) |
+| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Базовый URL OpenAI-совместимого API |
+| `OPENAI_MODEL` | `gpt-4.1` | Модель, используемая AI-операциями |
+
+## Документация
+
+Канон конвейера и контракты слоёв: https://meisei.ru/docs
+
+## Лицензия
+
+Apache-2.0 WITH Commons-Clause — см. [LICENSE](LICENSE) и
+[LICENSE.commons-clause.md](LICENSE.commons-clause.md).

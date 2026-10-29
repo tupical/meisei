@@ -14,9 +14,10 @@ name = "meisei"
 path = "src/bin/meisei.rs"
 
 [dependencies]
-# The five maturity layers, wired in pipeline order. They are vendored as
-# git submodules in the canonical sibling layout, so the whole run builds
-# from this checkout alone. This crate owns no business logic — it only
+# The five maturity layers, wired in pipeline order. They live in this
+# repository as ordinary directories (each its own Cargo workspace, finding
+# layer-kit as ../layer-kit), so the whole run builds from this checkout
+# alone. This crate owns no business logic — it only
 # calls the adapters each layer already exposes, threading one object's
 # provenance into the next:
 #   RawItem (torii) → SensingItem (satori) → Decision (enma)

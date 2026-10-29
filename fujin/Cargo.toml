@@ -1,0 +1,22 @@
+[package]
+name = "fujin"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+license = "Apache-2.0 WITH Commons-Clause"
+
+[workspace]
+members = ["server"]
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+# Self-contained skeleton: NO daruma-* and NO sibling *_oss deps.
+# Every primitive / domain / contract type is local. Cross-layer wiring
+# (e.g. ActionPacket::from_brief(PlanBrief), real daruma dispatch) is
+# supplied by the host — implementations live only inside the host, never here.
+serde      = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+uuid       = { version = "1.10", features = ["v7", "serde"] }
+layer-kit  = { path = "../layer-kit" }

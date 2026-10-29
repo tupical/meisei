@@ -78,31 +78,24 @@ pub fn brief_from_decisions(decisions: &[enma::Decision]) -> PlanBrief {
     }
 }
 
-/// §16 bridge: actions NewPlan → daruma NewPlan. The packet's provenance
-/// links ride into `source_brief`, so the daruma-side plan still points at
-/// the decision it came from.
-pub fn lower_new_plan(src: fujin::NewPlan) -> TaNewPlan {
+/// §16 bridge: actions HandoffProject → daruma NewPlan. The packet's
+/// provenance links ride into `source_brief`, so the daruma-side plan still
+/// points at the decision it came from.
+pub fn lower_new_plan(project: &fujin::HandoffProject, owner: TaActor) -> TaNewPlan {
     let source_brief = serde_json::to_string(&serde_json::json!({
-        "linked_decisions": src.linked_decisions,
-        "linked_knowledge": src.linked_knowledge,
-        "linked_rejected": src.linked_rejected,
+        "linked_decisions": project.linked_decisions,
+        "linked_knowledge": project.linked_knowledge,
+        "linked_rejected": project.linked_rejected,
     }))
     .ok();
     TaNewPlan {
         project_id: daruma_shared::ProjectId::new(),
-        title: src.title,
-        owner: ta_actor_owner(&src.owner),
+        title: project.plan_title.clone(),
+        owner,
         description: None,
-        goal: src.goal,
-        success_criteria: src.success_criteria,
+        goal: Some(project.goal.clone()),
+        success_criteria: Some(project.success_criteria.clone()),
         parent_plan_id: None,
         source_brief,
-    }
-}
-
-fn ta_actor_owner(a: &fujin::Actor) -> TaActor {
-    match a.kind {
-        fujin::ActorKind::User => TaActor::User,
-        fujin::ActorKind::Agent => TaActor::agent(a.id.clone()),
     }
 }

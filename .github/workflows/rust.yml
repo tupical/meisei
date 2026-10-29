@@ -1,39 +1,42 @@
 name: Rust
 
-# Единственный CI, гоняющий Rust в этом репозитории. Обёртка собирает все
-# слои из сабмодулей по path-зависимостям, поэтому чекаут строго с
-# submodules: recursive — без них Cargo.toml не находит torii/, satori/ и
-# остальные. Все репозитории публичные, так что хватает дефолтного
-# GITHUB_TOKEN (PAT, в отличие от слоёв, не нужен).
+# Единственный CI, гоняющий Rust в этом репозитории. Обёртка собирает слои
+# из каталогов этого репозитория по path-зависимостям; сабмодулем остаётся
+# только daruma/, поэтому чекаут строго с submodules: recursive — без него
+# Cargo.toml не находит daruma/crates/*. daruma публичный, так что хватает
+# дефолтного GITHUB_TOKEN (PAT не нужен).
 on:
   pull_request:
     paths:
       - "**/*.rs"
-      - Cargo.toml
-      - Cargo.lock
+      - "**/Cargo.toml"
+      - "**/Cargo.lock"
       - .github/workflows/rust.yml
-      # апдейт сабмодуля — это изменение gitlink-пути, не .rs
-      - torii
-      - satori
-      - enma
-      - yatagarasu
-      - fujin
+      # слои — обычные каталоги (prompts/, migrations/ и пр. — тоже вход
+      # сборки); daruma — gitlink, его апдейт не .rs
+      - "torii/**"
+      - "satori/**"
+      - "enma/**"
+      - "yatagarasu/**"
+      - "fujin/**"
+      - "layer-kit/**"
+      - "hyakki/**"
       - daruma
-      - layer-kit
   push:
     branches: [main]
     paths:
       - "**/*.rs"
-      - Cargo.toml
-      - Cargo.lock
+      - "**/Cargo.toml"
+      - "**/Cargo.lock"
       - .github/workflows/rust.yml
-      - torii
-      - satori
-      - enma
-      - yatagarasu
-      - fujin
+      - "torii/**"
+      - "satori/**"
+      - "enma/**"
+      - "yatagarasu/**"
+      - "fujin/**"
+      - "layer-kit/**"
+      - "hyakki/**"
       - daruma
-      - layer-kit
   workflow_dispatch:
 
 jobs:

@@ -6,11 +6,11 @@
 [![License: Apache-2.0 WITH Commons-Clause](https://img.shields.io/badge/license-Apache--2.0%20WITH%20Commons--Clause-blue.svg)](LICENSE)
 
 <sub>
-<a href="https://github.com/tupical/torii">torii</a> ·
-<a href="https://github.com/tupical/satori">satori</a> ·
-<a href="https://github.com/tupical/enma">enma</a> ·
-<a href="https://github.com/tupical/yatagarasu">yatagarasu</a> ·
-<a href="https://github.com/tupical/fujin">fujin</a> ·
+<a href="torii/">torii</a> ·
+<a href="satori/">satori</a> ·
+<a href="enma/">enma</a> ·
+<a href="yatagarasu/">yatagarasu</a> ·
+<a href="fujin/">fujin</a> ·
 <a href="https://github.com/tupical/daruma">daruma</a>
 &nbsp;—&nbsp; intake · sensemaking · decisions · planning · actions · execution (terminal)
 </sub>
@@ -19,8 +19,9 @@
 
 `meisei-pipeline` is a **deterministic lineage fixture/demo** connecting the
 Meisei layers in-process, down to a Daruma `NewPlan`. It proves cross-layer id
-connectivity, not production semantics. The layers and `layer-kit` are pinned
-as git submodules so the fixture builds from this checkout.
+connectivity, not production semantics. The layers and `layer-kit` live in
+this repository as ordinary directories, so the fixture builds from this
+checkout; only Daruma is a git submodule.
 
 **Hypothesis/text does not become a Decision** ([ADR-0011](https://github.com/tupical/meisei.ru/blob/main/adr/0011-hypothesis-not-decision-worthy.md)).
 A real transition to a decision is a semantically justified enma operation,
@@ -59,15 +60,15 @@ hypotheses. It does not verify semantic maturity.
 
 | Layer | Repo | Role | Artifact |
 | --- | --- | --- | --- |
-| **torii** 鳥居 | [tupical/torii](https://github.com/tupical/torii) | intake — the single entry point for raw material | `RawItem` |
-| **satori** 悟り | [tupical/satori](https://github.com/tupical/satori) | sensemaking — raw material → understanding | `SensingItem` |
-| **enma** 閻魔 | [tupical/enma](https://github.com/tupical/enma) | decisions — understanding → direction | `Decision` |
-| **yatagarasu** 八咫烏 | [tupical/yatagarasu](https://github.com/tupical/yatagarasu) | planning — decisions → plans | `PlanBrief` |
-| **fujin** 風神 | [tupical/fujin](https://github.com/tupical/fujin) | actions — the maturity boundary before execution | `ActionPacket` |
+| **torii** 鳥居 | [`torii/`](torii/) | intake — the single entry point for raw material | `RawItem` |
+| **satori** 悟り | [`satori/`](satori/) | sensemaking — raw material → understanding | `SensingItem` |
+| **enma** 閻魔 | [`enma/`](enma/) | decisions — understanding → direction | `Decision` |
+| **yatagarasu** 八咫烏 | [`yatagarasu/`](yatagarasu/) | planning — decisions → plans | `PlanBrief` |
+| **fujin** 風神 | [`fujin/`](fujin/) | actions — the maturity boundary before execution | `ActionPacket` |
 | **daruma** 達磨 | [tupical/daruma](https://github.com/tupical/daruma) | execution (terminal) — plans driven to *done* | `NewPlan` |
 
 Shared cross-layer infra (HTTP/MCP server scaffold, auth, storage):
-[tupical/layer-kit](https://github.com/tupical/layer-kit). Each layer also
+[`layer-kit/`](layer-kit/). Each layer also
 ships an independently deployable server (`<layer>-server`) exposing its MCP
 surface — that is how production hosts run the pipeline over HTTP hops.
 
@@ -113,7 +114,7 @@ cargo test          # lineage roundtrip, fixture labels, and refusal regression
 - `src/adapters.rs` translates sibling types for the fixture. Only `Insight`
   is eligible; `Hypothesis` and all other kinds yield `NotDecisionWorthy`.
 - `src/lib.rs` — `run_lineage_fixture(raw, actor)` threads ids through the
-  adapters and fujin's `to_handoff` check into an in-memory Daruma `NewPlan`.
+  adapters and fujin's §13 `assess_with` gate into an in-memory Daruma `NewPlan`.
 - `fixture_brief`/`fixture_packet` supply marked placeholders solely to
   exercise that wiring offline. Passing checks with these placeholders is
   not evidence of maturity, and they are never a fallback for missing AI output
@@ -121,13 +122,20 @@ cargo test          # lineage roundtrip, fixture labels, and refusal regression
 
 ## Repository layout
 
-- `torii/` `satori/` `enma/` `yatagarasu/` `fujin/` `daruma/` `layer-kit/` —
-  the layers as git submodules, pinned to exact commits.
+- `torii/` `satori/` `enma/` `yatagarasu/` `fujin/` — the five maturity
+  layers. Each is its own Cargo workspace (the library plus its `server/`).
+- `layer-kit/` — shared layer infrastructure; the layers depend on it as
+  `../layer-kit`.
+- `hyakki/` — the coordination layer: a read-only projection outside the
+  maturity hops, not part of the fixture.
+- `daruma/` — git submodule; the fixture uses only `daruma-domain` and
+  `daruma-shared`.
 - `src/` — the `meisei-pipeline` library and the `meisei` CLI.
 - `tests/` — lineage fixture tests.
 
-Already cloned without `--recurse-submodules`? Run
-`git submodule update --init`.
+The layer directories were imported with their history from the former
+`tupical/<layer>` repositories. Already cloned without
+`--recurse-submodules`? Run `git submodule update --init` (fetches `daruma/`).
 
 ## Docs
 
