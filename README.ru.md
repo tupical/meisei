@@ -16,17 +16,20 @@ torii · satori · enma · <b>yatagarasu</b> · fujin · daruma
 Yatagarasu — **planning**-слой конвейера MeiSei: превращает решения в планы.
 Владеет AI-операциями планирования — `plan_ai` (контекст решения →
 `PlanBrief`), `decompose_task` (задача → минимум два черновика подзадач),
-`scope_task` (расширить/сузить задачу переписыванием заголовка и описания) и
-`analyze_complexity_batch` (пакетная оценка сложности задач плана для fan-out
-декомпозиции) — плюс детерминированная проверка готовности плана
-(`check_readiness`). Доменные примитивы не зависят от хранилища; брифы планов
-персистит сервер. Крейт не зависит от daruma и соседних слоёв; адаптеры живут
-только внутри host.
+`scope_task` (расширить/сузить задачу переписыванием заголовка и описания) —
+плюс детерминированная проверка готовности плана (`check_readiness`). Доменные
+примитивы не зависят от хранилища; брифы планов персистит сервер. Крейт не
+зависит от daruma и соседних слоёв; адаптеры живут только внутри host.
+
+Пакетная оценка сложности задач реализована AI-маршрутами сервера Daruma и
+проекцией `task_complexity_hints`. Дублирующий оценщик и его промпт отсюда
+удалены. `decompose` и `scope` остаются самостоятельными, доступными
+операциями планирования; ни одна из них не изменяет задачи Daruma напрямую.
 
 ## Структура репозитория
 
 - `src/` — библиотека `yatagarasu`: `PlanBrief`, операции
-  decompose/scope/complexity, черновики задач, движок промптов, типы ошибок.
+  decompose/scope, черновики задач, движок промптов, типы ошибок.
 - `server/` — `yatagarasu-server`, тонкая независимо развёртываемая HTTP/MCP
   обёртка над библиотекой (axum/tokio-каркас — из
   [`layer-kit`](../layer-kit)).
@@ -39,7 +42,7 @@ cargo run -p yatagarasu-server
 # GET  /healthz   — открытая проба живости/версии
 # POST /v1/mcp    — MCP-поверхность под платформенным токеном:
 #                   yatagarasu.plan, yatagarasu.decompose,
-#                   yatagarasu.scope, yatagarasu.analyze_complexity,
+#                   yatagarasu.scope,
 #                   yatagarasu.read
 ```
 
@@ -54,7 +57,7 @@ cargo run -p yatagarasu-server
 | `YATAGARASU_PLATFORM_SECRET` | не задан | HMAC-ключ; если не задан, `/v1/mcp` закрыт |
 | `YATAGARASU_VERSION` | версия крейта | Версия, отдаваемая `/healthz` |
 | `YATAGARASU_DB` | `./yatagarasu.db` | Путь к SQLite-хранилищу (`layer_kit::store::Store`) |
-| `OPENAI_API_KEY` | не задан | Опциональный AI-провайдер для `yatagarasu.plan` / `decompose` / `scope` / `analyze_complexity`; без ключа — ответ `ai_not_configured` (503) |
+| `OPENAI_API_KEY` | не задан | Опциональный AI-провайдер для `yatagarasu.plan` / `decompose` / `scope`; без ключа — ответ `ai_not_configured` (503) |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Базовый URL OpenAI-совместимого API |
 | `OPENAI_MODEL` | `gpt-4.1` | Модель, используемая AI-операциями |
 

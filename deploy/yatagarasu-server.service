@@ -21,8 +21,8 @@ Environment=YATAGARASU_VERSION=0.1.0
 Environment=YATAGARASU_DB=%h/.local/share/yatagarasu/yatagarasu.db
 # YATAGARASU_PLATFORM_SECRET (and any future keys) live here, NOT in this unit:
 # OPENAI_API_KEY[/OPENAI_BASE_URL/OPENAI_MODEL] also goes there — without it
-# the AI methods `yatagarasu.plan` / `decompose` / `scope` / `analyze_complexity`
-# answer ai_not_configured (503).
+# the AI methods `yatagarasu.plan` / `decompose` / `scope` answer
+# ai_not_configured (503).
 EnvironmentFile=-%h/.config/yatagarasu/yatagarasu.env
 ExecStartPre=/usr/bin/mkdir -p %h/.local/share/yatagarasu
 ExecStart=%h/.local/bin/yatagarasu-server
