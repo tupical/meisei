@@ -23,7 +23,9 @@ connectivity, not production semantics. The layers and `layer-kit` live in
 this repository as ordinary directories, so the fixture builds from this
 checkout; only Daruma is a git submodule.
 
-**Hypothesis/text does not become a Decision** ([ADR-0011](https://github.com/tupical/meisei.ru/blob/main/adr/0011-hypothesis-not-decision-worthy.md)).
+**Hypothesis/text does not become a Decision** (ADR-0011, “hypothesis is not
+decision-worthy”; Meisei ADRs are kept in a private design repository and are
+not publicly accessible, so the rule is summarised here).
 A real transition to a decision is a semantically justified enma operation,
 not an automatic step. The fixture accepts only `Insight` for its lineage demo.
 

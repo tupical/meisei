@@ -36,7 +36,7 @@ fn sensing_kind_for(kind: RawItemKind) -> SensingItemKind {
 
 /// Fixture hop 2: only an Insight can yield a NewDecision.
 /// This translation demonstrates lineage, not a semantically justified enma decision.
-/// Hypotheses are refused per [ADR-0011](https://github.com/tupical/meisei.ru/blob/main/adr/0011-hypothesis-not-decision-worthy.md).
+/// Hypotheses are refused per ADR-0011 (private design repository; summarised in README.md).
 pub fn decision_from_sensing(sensing: &SensingItem, actor: &TaActor) -> Option<NewDecision> {
     if !enma::is_decision_worthy(sensing.kind.as_str()) {
         return None;
