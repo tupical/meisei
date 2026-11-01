@@ -52,9 +52,8 @@ acceptance criterion with no line in the diff.
    public. A tracked `.omc/`, `.serena/` or other agent state, home paths,
    tokens or internal ids (the class behind the torii/enma/fujin
    `hud-stdin-cache.json` finding) — blocker. A new link from public text
-   to the private `tupical/meisei.ru` — blocker; the two existing ADR-0011
-   links in `README.md` and `src/adapters.rs` are a known open finding, not
-   this diff's.
+   to the private `tupical/meisei.ru` — blocker; cite an ADR by number and
+   title and summarise it in place, as `README.md` does for ADR-0011.
 6. **The README lies.** The Quickstart output block must match what
    `cargo run --quiet -- fixture …` prints (the banner line is asserted
    literally in `cli_labels_fixture_and_refuses_text_hypothesis`); the exit
