@@ -466,11 +466,8 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "layer-kit",
- "once_cell",
  "serde",
  "serde_json",
- "tinytemplate",
- "toml",
  "uuid",
 ]
 
