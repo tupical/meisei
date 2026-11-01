@@ -50,6 +50,8 @@ pub fn decision_from_sensing(sensing: &SensingItem, actor: &TaActor) -> Option<N
         alternatives: Vec::<Alternative>::new(),
         consequences: Vec::new(),
         revisit_when: String::new(),
+        // ADR-0017: a fixture does not classify; only decide_ai answers it.
+        reversibility: None,
         links: vec![Link::Sensemaking {
             reference: sensing.id.to_string(),
         }],
