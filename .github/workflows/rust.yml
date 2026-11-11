@@ -64,7 +64,9 @@ jobs:
       # --no-fail-fast обязателен: без него прогон обрывается на первом
       # красном и выдаёт долю набора за полный.
       - name: Test
-        run: python3 scripts/ci/test_evidence.py
+        run: |
+          python3 -B -m unittest discover -s scripts/ci -p "test_test_evidence.py"
+          python3 -B scripts/ci/test_evidence.py
 
       - name: Upload test evidence
         if: always()
