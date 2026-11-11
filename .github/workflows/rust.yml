@@ -12,6 +12,7 @@ on:
       - "**/Cargo.toml"
       - "**/Cargo.lock"
       - .github/workflows/rust.yml
+      - "scripts/ci/**"
       # слои — обычные каталоги (prompts/, migrations/ и пр. — тоже вход
       # сборки); daruma — gitlink, его апдейт не .rs
       - "torii/**"
@@ -29,6 +30,7 @@ on:
       - "**/Cargo.toml"
       - "**/Cargo.lock"
       - .github/workflows/rust.yml
+      - "scripts/ci/**"
       - "torii/**"
       - "satori/**"
       - "enma/**"
@@ -62,4 +64,14 @@ jobs:
       # --no-fail-fast обязателен: без него прогон обрывается на первом
       # красном и выдаёт долю набора за полный.
       - name: Test
-        run: cargo test --workspace --no-fail-fast
+        run: |
+          python3 -B -m unittest discover -s scripts/ci -p "test_test_evidence.py"
+          python3 -B scripts/ci/test_evidence.py
+
+      - name: Upload test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-test-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/meisei-test-evidence/
+          if-no-files-found: warn
