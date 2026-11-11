@@ -9,8 +9,9 @@ import subprocess
 import sys
 
 COMMAND = ["cargo", "test", "--workspace", "--no-fail-fast"]
-FOOTER = re.compile(r"^test result: (ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored; (\d+) measured; (\d+) filtered out; finished in .+$", re.M)
-START = re.compile(r"^\s*(?:Running (?:unittests|tests/|[^\n]*\([^\n]*\))|Doc-tests )", re.M)
+FOOTER = re.compile(r"test result: (ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored; (\d+) measured; (\d+) filtered out; finished in \d+(?:\.\d+)?s")
+START = re.compile(r"\s*(?:Running (?:unittests|tests/|.*\(.*\))|Doc-tests ).*")
+TEST = re.compile(r"test (.+) \.\.\. (ok|FAILED|ignored)(?:, (.+))?")
 
 
 def git(*args):
@@ -30,17 +31,39 @@ def identity():
 
 
 def counts(raw):
-    text = raw.decode("utf-8", errors="strict")
-    footers = FOOTER.findall(text)
-    starts = START.findall(text)
-    if not footers or len(starts) != len(footers):
+    result = {"executed": 0, "passed": 0, "failed": 0, "skipped": 0, "skip_reasons": []}
+    section = None
+    completed = 0
+    for line in raw.decode("utf-8", errors="strict").splitlines():
+        if START.fullmatch(line):
+            if section is not None:
+                raise ValueError("incomplete test section")
+            section = {"running": None, "ok": 0, "FAILED": 0, "ignored": 0}
+        elif section is not None and re.fullmatch(r"running \d+ tests?", line):
+            if section["running"] is not None:
+                raise ValueError("duplicate test count")
+            section["running"] = int(line.split()[1])
+        elif section is not None and (test := TEST.fullmatch(line)):
+            section[test[2]] += 1
+            if test[2] == "ignored":
+                result["skip_reasons"].append({"test": test[1], "reason": test[3]})
+        elif footer := FOOTER.fullmatch(line):
+            if section is None or section["running"] is None:
+                raise ValueError("missing test section")
+            passed, failed, skipped, measured = map(int, footer.group(2, 3, 4, 5))
+            if (measured or section["running"] != passed + failed + skipped
+                    or (passed, failed, skipped) != (section["ok"], section["FAILED"], section["ignored"])
+                    or (footer[1] == "ok") != (failed == 0)):
+                raise ValueError("inconsistent test output")
+            result["passed"] += passed
+            result["failed"] += failed
+            result["skipped"] += skipped
+            completed += 1
+            section = None
+    if not completed or section is not None:
         raise ValueError("missing or incomplete test output")
-    passed = sum(int(f[1]) for f in footers)
-    failed = sum(int(f[2]) for f in footers)
-    skipped = sum(int(f[3]) for f in footers)
-    if any(f[0] != "ok" for f in footers) or failed or passed == 0:
-        raise ValueError("test run failed or executed zero tests")
-    return {"executed": passed + failed, "passed": passed, "failed": failed, "skipped": skipped}
+    result["executed"] = result["passed"] + result["failed"]
+    return result
 
 
 def validate(directory, current):
@@ -58,6 +81,8 @@ def validate(directory, current):
         raise ValueError("raw output digest mismatch")
     if record["counts"] != counts(raw):
         raise ValueError("counts do not match raw output")
+    if record["counts"]["failed"] or not record["counts"]["executed"]:
+        raise ValueError("test run failed or executed zero tests")
     return record
 
 

@@ -26,10 +26,28 @@ class EvidenceTests(unittest.TestCase):
     def test_valid(self):
         self.assertEqual(evidence.validate(self.path, IDENTITY)["counts"]["executed"], 1)
 
-    def test_zero_skipped_failure_and_truncation(self):
-        for raw in (GOOD.replace(b'1 passed', b'0 passed'), GOOD.replace(b'1 passed; 0 failed; 0 ignored', b'0 passed; 0 failed; 1 ignored'), GOOD.replace(b'ok. 1 passed; 0 failed', b'FAILED. 0 passed; 1 failed'), GOOD[:100], GOOD + b'     Running unittests second (target/x)\n'):
+    def test_inconsistent_and_truncated(self):
+        for raw in (GOOD.replace(b'running 1 test', b'running 2 tests'), GOOD.replace(b'running 1 test\ntest example ... ok\n', b''), GOOD.replace(b'test example ... ok', b'test example ... FAILED'), GOOD.replace(b'finished in 0.00s', b'finished in broken'), GOOD[:100], GOOD + b'     Running unittests second (target/x)\n'):
             with self.subTest(raw=raw), self.assertRaises(ValueError):
                 evidence.counts(raw)
+
+    def test_rejected_results_preserve_summary_counts(self):
+        cases = (
+            (GOOD.replace(b'running 1 test\ntest example ... ok', b'running 0 tests').replace(b'1 passed', b'0 passed'), (0, 0, 0, 0), []),
+            (GOOD.replace(b'test example ... ok', b'test example ... ignored, requires external service').replace(b'1 passed; 0 failed; 0 ignored', b'0 passed; 0 failed; 1 ignored'), (0, 0, 0, 1), [{'test': 'example', 'reason': 'requires external service'}]),
+            (GOOD.replace(b'test example ... ok', b'test example ... FAILED').replace(b'ok. 1 passed; 0 failed', b'FAILED. 0 passed; 1 failed'), (1, 0, 1, 0), []),
+        )
+        for raw, expected, reasons in cases:
+            with self.subTest(expected=expected):
+                self.record['counts'] = evidence.counts(raw)
+                self.record['sha256'] = hashlib.sha256(raw).hexdigest()
+                (self.path / 'test-output.log').write_bytes(raw)
+                self.save()
+                summary = json.loads((self.path / 'summary.json').read_text())
+                self.assertEqual(tuple(summary['counts'][k] for k in ('executed', 'passed', 'failed', 'skipped')), expected)
+                self.assertEqual(summary['counts']['skip_reasons'], reasons)
+                with self.assertRaises(ValueError):
+                    evidence.validate(self.path, IDENTITY)
 
     def test_artifact_tampering(self):
         for key, value in (("counts", {"executed": 42}), ("sha256", "bad"), ("exit_code", 1), ("command", ["other"])):
