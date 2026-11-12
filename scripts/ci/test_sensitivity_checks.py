@@ -26,9 +26,8 @@ class SensitivityTests(unittest.TestCase):
         self.addCleanup(self.environment.stop)
 
     def execute(self, **kwargs):
-        with patch.object(sensitivity, 'FIXTURE', self.fixture):
-            with patch.multiple(sensitivity, **kwargs):
-                code = sensitivity.run()
+        with patch.multiple(sensitivity, FIXTURE=self.fixture, **kwargs):
+            code = sensitivity.run()
         outputs = list(self.root.glob('sensitivity-*/sensitivity.json'))
         self.assertEqual(len(outputs), 1)
         result = json.loads(outputs[0].read_text())
