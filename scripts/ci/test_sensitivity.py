@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Opt-in sensitivity check for the zero-executed risk, using CM-1 capture."""
+"""Opt-in fixture sensitivity check using CM-1 capture; it is not CI attestation.
+
+Set RUNNER_TEMP and the CM-1 GITHUB_* identity variables before invoking this file.
+Local identity values are synthetic. Each invocation saves raw evidence under RUNNER_TEMP.
+"""
 import difflib
 import hashlib
 import json
@@ -29,7 +33,8 @@ def run():
     old_temp = os.environ['RUNNER_TEMP']
     old_target = os.environ.get('CARGO_TARGET_DIR')
     old_handlers = {sig: signal.signal(sig, interrupted) for sig in (signal.SIGINT, signal.SIGTERM)}
-    result = {'status': 'not_proven', 'head': evidence.git('rev-parse', 'HEAD'), 'phases': []}
+    result = {'status': 'not_proven', 'head': evidence.git('rev-parse', 'HEAD'), 'phases': [], 'runs': 0,
+              'environment': {key: os.environ.get(key) for key in ('CARGO_NET_OFFLINE', 'RUSTFLAGS', 'RUSTUP_TOOLCHAIN')}}
     try:
         with tempfile.TemporaryDirectory(prefix='sensitivity-fixture-') as temporary:
             fixture = Path(temporary) / 'fixture'
@@ -48,6 +53,7 @@ def run():
                 phase_dir = output / phase
                 phase_dir.mkdir()
                 os.environ['RUNNER_TEMP'] = str(phase_dir)
+                result['runs'] += 1
                 code = evidence.main()
                 directory = phase_dir / 'meisei-test-evidence'
                 raw = (directory / 'test-output.log').read_bytes()
@@ -56,7 +62,7 @@ def run():
                 if record.get('command') != evidence.COMMAND or record.get('identity') != evidence.identity() or record.get('sha256') != hashlib.sha256(raw).hexdigest() or record.get('counts') != actual:
                     raise ValueError(f'{phase}: invalid or stale evidence')
                 if phase == 'fault':
-                    if code != 1 or record['exit_code'] == 0 or actual['executed'] != 1 or actual['failed'] != 1 or f'test {TEST} ... FAILED'.encode() not in raw or b'assertion failed:' not in raw:
+                    if code != 1 or record['exit_code'] != 101 or actual['executed'] != 1 or actual['failed'] != 1 or f'test {TEST} ... FAILED'.encode() not in raw or b'assertion failed: !accepts_evidence(0)' not in raw:
                         raise ValueError('fault: expected assertion failure was not observed')
                 elif code != 0 or actual['executed'] != 1 or actual['passed'] != 1 or f'test {TEST} ... ok'.encode() not in raw:
                     raise ValueError(f'{phase}: expected baseline pass was not observed')
@@ -66,7 +72,6 @@ def run():
         result['error'] = str(error)
     finally:
         result['seconds'] = round(time.monotonic() - started, 3)
-        result['runs'] = len(result['phases'])
         (output / 'sensitivity.json').write_text(json.dumps(result, indent=2) + '\n')
         evidence.COMMAND = old_command
         os.environ['RUNNER_TEMP'] = old_temp
